@@ -1,0 +1,21 @@
+:root {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: #e9e8f3;
+  background: #0e0c18;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --agent-color-idle: #8d899e;
+  --agent-color-working: #65d6a4;
+  --agent-color-waiting: #f2b85b;
+  --agent-color-error: #ff6b7a;
+}
+
+* { box-sizing: border-box; }
+html { min-width: 320px; min-height: 100%; background: #0e0c18; }
+body { margin: 0; min-width: 320px; min-height: 100vh; }
+button, input { font: inherit; }
+button { color: inherit; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
+}
