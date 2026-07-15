@@ -23,7 +23,7 @@ const ROOMS = {
   },
   meeting: {
     label: 'Meeting Room', icon: '◇', subtitle: 'Waiting & collaborating',
-    spots: [[34, 69], [43, 69], [34, 81], [43, 81]],
+    spots: [[32, 68], [39, 68], [46, 68], [32, 79], [39, 79], [46, 79], [32, 89], [39, 89], [46, 89]],
   },
   quality: {
     label: 'Quality Lab', icon: '✓', subtitle: 'Testing & reviewing',
@@ -64,10 +64,11 @@ function destinationFor(agent) {
   if (/complete|finished|done|archived|taking a break|recharging/.test(task)) return 'breakroom';
   if (agent.status === 'idle') return 'breakroom';
   if (agent.name === 'Friday') return 'operations';
+  if (['queued', 'waiting', 'error'].includes(agent.status)) return 'meeting';
   if (agent.name === 'Atlas') return 'meeting';
   if (agent.name === 'Quinn' || /quality|test|testing|qa|verify|validation/.test(task)) return 'quality';
   if (['Maya', 'Studio'].includes(agent.name) || /design|creative|image|video|visual|ux|ui/.test(task)) return 'creative';
-  if (agent.status === 'waiting' || /waiting|blocked|approval|review|sync|meeting/.test(task)) return 'meeting';
+  if (/waiting|blocked|approval|review|sync|meeting/.test(task)) return 'meeting';
   if (/research|search|analyse|analyze|document|obsidian|read|investigate/.test(task)) return 'research';
   if (/monitor|cron|deploy|backend|server|gateway|schedule|incident|system/.test(task)) return 'operations';
   if (HOME_ROOMS[agent.name]) return HOME_ROOMS[agent.name];
@@ -121,7 +122,11 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent }) {
     await request?.call(map);
   };
   const roomUse = Object.fromEntries(roomOrder.map((room) => [room, 0]));
-  const placedAgents = agents.slice(0, 24).map((agent) => {
+  const orderedAgents = [...agents].slice(0, 24).sort((left, right) => {
+    const roomDifference = roomOrder.indexOf(destinationFor(left)) - roomOrder.indexOf(destinationFor(right));
+    return roomDifference || left.id.localeCompare(right.id);
+  });
+  const placedAgents = orderedAgents.map((agent) => {
     const room = destinationFor(agent);
     const slot = roomUse[room]++;
     const spots = ROOMS[room].spots;
@@ -166,14 +171,14 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent }) {
     <div className="office-frame realistic-office">
       <div className="office-toolbar">
         <div className="office-actions">
-          <div className="office-legend"><span><i className="working" />Working</span><span><i className="waiting" />Waiting</span><span><i />On break</span></div>
+          <div className="office-legend"><span><i className="working" />Working</span><span><i className="queued" />Queued</span><span><i className="waiting" />Waiting</span><span><i />On break</span></div>
           <button className={controlsOpen ? 'view-button active' : 'view-button'} onClick={() => setControlsOpen(!controlsOpen)} aria-expanded={controlsOpen}>☷ <span>View</span></button>
           {controlsOpen && (
             <div className="view-menu">
               <div className="view-menu-head"><strong>Office view</strong><button onClick={() => setControlsOpen(false)} aria-label="Close view controls">×</button></div>
               <label>Show agents</label>
               <div className="control-pills">
-                {['all', 'working', 'waiting', 'idle'].map((status) => (
+                {['all', 'working', 'queued', 'waiting', 'error', 'idle'].map((status) => (
                   <button className={statusFilter === status ? 'active' : ''} key={status} onClick={() => setStatusFilter(status)}>{status === 'idle' ? 'Break' : titleCase(status)}</button>
                 ))}
               </div>
@@ -260,7 +265,9 @@ function titleCase(value) {
 
 function speechIntro(agent) {
   if (agent.status === 'idle') return 'Taking a break';
+  if (agent.status === 'queued') return 'Queued for work';
   if (agent.status === 'waiting') return 'Waiting on this';
+  if (agent.status === 'error') return 'Needs attention';
   if (agent.name === 'Friday') return 'Coordinating the team';
   if (agent.name === 'Atlas') return 'Managing the pipeline';
   return 'Working on this';

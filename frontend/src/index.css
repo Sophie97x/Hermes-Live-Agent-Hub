@@ -6,6 +6,7 @@
   text-rendering: optimizeLegibility;
   --agent-color-idle: #8d899e;
   --agent-color-working: #65d6a4;
+  --agent-color-queued: #72a7ef;
   --agent-color-waiting: #f2b85b;
   --agent-color-error: #ff6b7a;
 }

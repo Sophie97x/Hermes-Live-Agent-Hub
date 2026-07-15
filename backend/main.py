@@ -61,25 +61,35 @@ def _read_json(path: Path) -> dict:
         return {}
 
 
-def _iso(ts: Optional[float]) -> str:
+def _iso(ts: Optional[float]) -> Optional[str]:
     if ts:
         return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
-    return datetime.now(timezone.utc).isoformat()
+    return None
+
+
+def _pid_is_alive(pid: Optional[int]) -> bool:
+    """Return whether a local worker process still exists without spawning tools."""
+    if not pid:
+        return False
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except PermissionError:
+        return True
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+HEARTBEAT_STALE_SECONDS = 120
+FRIDAY_ACTIVITY_WINDOW_SECONDS = 300
 
 
 # ── state readers ─────────────────────────────────────────────────────
 
 _SESSION_SOURCE_AGENT_NAMES = {"default", "desktop", "cli", "tui", "subagent", "gateway"}
 
-_STATUS_MAP = {
-    "active": "working",
-    "blocked": "waiting",
-    "done": "idle",
-    "archived": "idle",
-    "cancelled": "idle",
-}
-
 _KANBAN_COLUMN = {
+    "todo": "backlog",
     "ready": "backlog",
     "queued": "backlog",
     "active": "in_progress",
@@ -179,22 +189,46 @@ def discover_team() -> list[dict]:
 def read_agents() -> list[dict]:
     """Return Friday plus every real Hermes profile, never raw transport sessions."""
     task_rows = _query(KANBAN_DB, """
-        SELECT assignee, title, status, created_at FROM tasks
-        WHERE assignee IS NOT NULL AND assignee != ''
-          AND status NOT IN ('archived', 'done', 'cancelled')
-        ORDER BY created_at DESC
+        SELECT t.id, t.assignee, t.title, t.status, t.created_at,
+               t.started_at, t.worker_pid, t.last_heartbeat_at,
+               t.current_run_id, t.last_failure_error,
+               r.id AS run_id, r.status AS run_status,
+               r.worker_pid AS run_worker_pid,
+               r.last_heartbeat_at AS run_last_heartbeat_at,
+               r.started_at AS run_started_at, r.ended_at AS run_ended_at,
+               r.outcome AS run_outcome, r.error AS run_error
+        FROM tasks t
+        LEFT JOIN task_runs r ON r.id = (
+            SELECT latest.id FROM task_runs latest
+            WHERE latest.task_id = t.id
+            ORDER BY latest.started_at DESC, latest.id DESC LIMIT 1
+        )
+        WHERE t.assignee IS NOT NULL AND t.assignee != ''
+          AND t.status NOT IN ('archived', 'done', 'cancelled')
+        ORDER BY
+          CASE t.status WHEN 'active' THEN 0 WHEN 'running' THEN 0
+                        WHEN 'blocked' THEN 1 ELSE 2 END,
+          t.created_at DESC
     """)
     latest_task: dict[str, dict] = {}
     for row in task_rows:
         latest_task.setdefault(str(row["assignee"]).lower(), row)
 
-    active_sessions = _query(STATE_DB, """
-        SELECT title, source, started_at FROM sessions
-        WHERE ended_at IS NULL
-        ORDER BY started_at DESC LIMIT 1
+    recent_sessions = _query(STATE_DB, """
+        SELECT s.id, s.title, s.source, s.started_at, s.ended_at,
+               MAX(m.timestamp) AS last_activity_at
+        FROM sessions s
+        LEFT JOIN messages m ON m.session_id = s.id AND m.active = 1
+        GROUP BY s.id
+        ORDER BY COALESCE(MAX(m.timestamp), s.started_at) DESC LIMIT 1
     """)
-    main_session = active_sessions[0] if active_sessions else None
-    open_tasks = list(latest_task.values())
+    main_session = recent_sessions[0] if recent_sessions else None
+    gateway = read_gateway()
+    gateway_available = (
+        gateway.get("gateway_state") == "running"
+        and _pid_is_alive(gateway.get("pid"))
+    )
+    now = time.time()
 
     agents: list[dict] = []
     for index, member in enumerate(discover_team()):
@@ -202,24 +236,35 @@ def read_agents() -> list[dict]:
         task = latest_task.get(key)
 
         if key == "friday":
-            status = "working" if main_session else "idle"
-            current_task = (main_session or {}).get("title") or "Handling a live Hermes session"
-            started_at = _iso((main_session or {}).get("started_at"))
-        elif key == "atlas":
-            status = "working" if open_tasks else "idle"
-            current_task = (
-                f"Coordinating {len(open_tasks)} open team task{'s' if len(open_tasks) != 1 else ''}"
-                if open_tasks else "Team pipeline is clear"
-            )
-            started_at = _iso(None)
+            activity_at = (main_session or {}).get("last_activity_at") or (main_session or {}).get("started_at")
+            is_recent = bool(activity_at and now - float(activity_at) <= FRIDAY_ACTIVITY_WINDOW_SECONDS)
+            if not gateway_available:
+                status, status_reason = "error", "gateway_offline"
+                current_task = "Hermes gateway is unavailable"
+            elif is_recent:
+                status, status_reason = "working", "session_active"
+                current_task = (main_session or {}).get("title") or "Handling a live Hermes session"
+            else:
+                status, status_reason = "idle", "available"
+                current_task = "Available for the next request"
+            started_at = _iso((main_session or {}).get("started_at")) if is_recent else None
+            last_activity_at = _iso(activity_at)
+            task_id = None
+            run_id = None
         elif task:
-            status = _STATUS_MAP.get(task["status"], "working")
+            status, status_reason = _task_runtime_status(task, now)
             current_task = task["title"]
-            started_at = _iso(task.get("created_at"))
+            started_at = _iso(task.get("run_started_at") or task.get("started_at")) if status == "working" else None
+            last_activity_at = _iso(task.get("run_last_heartbeat_at") or task.get("last_heartbeat_at"))
+            task_id = task.get("id")
+            run_id = task.get("run_id")
         else:
-            status = "idle"
+            status, status_reason = "idle", "available"
             current_task = "Available for the next assignment"
-            started_at = _iso(None)
+            started_at = None
+            last_activity_at = None
+            task_id = None
+            run_id = None
 
         agents.append({
             "id": f"agent-{key}",
@@ -228,12 +273,46 @@ def read_agents() -> list[dict]:
             "specialty": member["specialty"],
             "home": member["home"],
             "status": status,
+            "status_reason": status_reason,
             "current_task": current_task,
             "started_at": started_at,
+            "last_activity_at": last_activity_at,
+            "task_id": task_id,
+            "run_id": run_id,
             "position": {"top": 10 + index * 12, "left": 10 + (index % 3) * 20},
         })
 
     return agents
+
+
+def _task_runtime_status(task: dict, now: float) -> tuple[str, str]:
+    """Classify an assignment from its task, latest run, heartbeat and PID."""
+    task_status = str(task.get("status") or "").lower()
+    run_status = str(task.get("run_status") or "").lower()
+    outcome = str(task.get("run_outcome") or "").lower()
+
+    if task_status == "blocked" or run_status == "blocked" or outcome == "blocked":
+        return "waiting", "blocked"
+
+    failed_states = {"failed", "crashed", "timed_out", "spawn_failed", "gave_up"}
+    if run_status in failed_states or outcome in failed_states:
+        return "error", "run_failed"
+
+    expects_worker = task_status in {"active", "running", "in_progress"} or run_status == "running"
+    if expects_worker:
+        pid = task.get("run_worker_pid") or task.get("worker_pid")
+        heartbeat = task.get("run_last_heartbeat_at") or task.get("last_heartbeat_at")
+        if not pid:
+            return "waiting", "worker_missing"
+        if not _pid_is_alive(pid):
+            return "error", "worker_stopped"
+        if not heartbeat:
+            return "waiting", "heartbeat_missing"
+        if now - float(heartbeat) > HEARTBEAT_STALE_SECONDS:
+            return "waiting", "stale_heartbeat"
+        return "working", "active_run"
+
+    return "queued", "assigned"
 
 
 def read_activity() -> list[dict]:

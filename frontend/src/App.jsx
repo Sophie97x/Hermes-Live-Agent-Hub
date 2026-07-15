@@ -83,7 +83,7 @@ function App() {
   }, []);
 
   const activeCount = agents.filter((agent) => agent.status === 'working').length;
-  const waitingCount = agents.filter((agent) => agent.status === 'waiting').length;
+  const attentionCount = agents.filter((agent) => ['waiting', 'error'].includes(agent.status)).length;
   const taskCount = useMemo(
     () => ['backlog', 'in_progress', 'review'].reduce((count, column) => count + (kanban[column]?.length || 0), 0),
     [kanban],
@@ -92,7 +92,11 @@ function App() {
     () => Object.values(kanban).reduce((count, tasks) => count + tasks.length, 0),
     [kanban],
   );
-  const filteredAgents = agents.filter((agent) => agentFilter === 'all' || agent.status === agentFilter);
+  const filteredAgents = agents.filter((agent) => (
+    agentFilter === 'all'
+    || (agentFilter === 'attention' && ['waiting', 'error'].includes(agent.status))
+    || agent.status === agentFilter
+  ));
 
   const openAgentView = (filter) => {
     setAgentFilter(filter);
@@ -118,7 +122,7 @@ function App() {
         </nav>
         <div className="sidebar-footer">
           <span className={connected ? 'connection-dot online' : 'connection-dot'} />
-          <small>{connected ? 'Live' : 'Offline'}</small>
+          <small>{connected ? `Hub connected · ${activeCount} active` : 'Hub offline'}</small>
         </div>
       </aside>
 
@@ -127,7 +131,7 @@ function App() {
           <div className="topbar-right">
             <div className="live-pill">
               <span className={connected ? 'connection-dot online' : 'connection-dot'} />
-              {connected ? 'Live systems' : 'Reconnecting'}
+              {connected ? `Hub connected · ${activeCount} active` : 'Reconnecting'}
             </div>
             <div className="clock-block">
               <span>Updated</span>
@@ -140,7 +144,7 @@ function App() {
           <button className="stat-card" onClick={() => openAgentView('working')} aria-label={`View ${activeCount} working agents`}><span className="stat-icon green">●</span><p><strong>{activeCount}</strong><small>Agents working</small></p><em>View →</em></button>
           <button className="stat-card" onClick={() => openAgentView('all')} aria-label={`View all ${agents.length} agents`}><span className="stat-icon violet">◆</span><p><strong>{agents.length}</strong><small>Agents visible</small></p><em>View →</em></button>
           <button className="stat-card" onClick={() => setView('tasks')} aria-label={`View ${taskCount} open tasks`}><span className="stat-icon blue">■</span><p><strong>{taskCount}</strong><small>Open tasks</small></p><em>Board →</em></button>
-          <button className="stat-card" onClick={() => openAgentView('waiting')} aria-label={`View ${waitingCount} agents needing attention`}><span className="stat-icon amber">◷</span><p><strong>{waitingCount}</strong><small>Need attention</small></p><em>Review →</em></button>
+          <button className="stat-card" onClick={() => openAgentView('attention')} aria-label={`View ${attentionCount} agents needing attention`}><span className="stat-icon amber">◷</span><p><strong>{attentionCount}</strong><small>Need attention</small></p><em>Review →</em></button>
         </section>
 
         {view === 'office' && (
@@ -150,9 +154,9 @@ function App() {
         )}
 
         {view === 'agents' && (
-          <Panel title={agentFilter === 'all' ? 'Agent roster' : agentFilter === 'working' ? 'Agents working' : agentFilter === 'waiting' ? 'Need attention' : 'Agents on break'} subtitle={`${filteredAgents.length} of ${agents.length} team members shown`}>
+          <Panel title={agentFilter === 'all' ? 'Agent roster' : agentFilter === 'working' ? 'Agents working' : agentFilter === 'queued' ? 'Queued agents' : agentFilter === 'attention' ? 'Need attention' : agentFilter === 'error' ? 'Agent errors' : agentFilter === 'waiting' ? 'Waiting agents' : 'Agents on break'} subtitle={`${filteredAgents.length} of ${agents.length} team members shown`}>
             <div className="roster-filters" aria-label="Filter agent roster">
-              {['all', 'working', 'waiting', 'idle'].map((filter) => <button key={filter} className={agentFilter === filter ? 'active' : ''} onClick={() => setAgentFilter(filter)}>{filter === 'idle' ? 'On break' : filter.charAt(0).toUpperCase() + filter.slice(1)}</button>)}
+              {['all', 'working', 'queued', 'waiting', 'error', 'idle'].map((filter) => <button key={filter} className={agentFilter === filter ? 'active' : ''} onClick={() => setAgentFilter(filter)}>{filter === 'idle' ? 'On break' : filter.charAt(0).toUpperCase() + filter.slice(1)}</button>)}
             </div>
             <div className="roster-grid">
               {filteredAgents.length ? filteredAgents.map((agent, index) => (
@@ -161,7 +165,7 @@ function App() {
                   <span><strong>{agent.name}</strong><small>{agent.current_task || 'Available for work'}</small></span>
                   <em className={`status-text ${agent.status}`}>{agent.status}</em>
                 </button>
-              )) : <EmptyState message={agentFilter === 'waiting' ? 'Nobody needs attention.' : agentFilter === 'working' ? 'Nobody is working right now.' : 'No agents in this view.'} />}
+              )) : <EmptyState message={agentFilter === 'attention' ? 'Nobody needs attention.' : agentFilter === 'working' ? 'Nobody is working right now.' : 'No agents in this view.'} />}
             </div>
           </Panel>
         )}
@@ -180,8 +184,10 @@ function App() {
             <h2>{selectedAgent.name}</h2>
             {selectedAgent.role && <p className="drawer-role">{selectedAgent.role} · {selectedAgent.specialty}</p>}
             <span className={`drawer-status ${selectedAgent.status}`}>{selectedAgent.status}</span>
+            <div className="drawer-detail"><small>Live state</small><strong>{statusReason(selectedAgent.status_reason)}</strong></div>
             <div className="drawer-detail"><small>Current assignment</small><strong>{selectedAgent.current_task || 'Waiting for an assignment'}</strong></div>
-            <div className="drawer-detail"><small>Started</small><strong>{new Date(selectedAgent.started_at).toLocaleString()}</strong></div>
+            <div className="drawer-detail"><small>Started</small><strong>{formatTimestamp(selectedAgent.started_at)}</strong></div>
+            <div className="drawer-detail"><small>Last activity</small><strong>{formatTimestamp(selectedAgent.last_activity_at)}</strong></div>
           </aside>
         </button>
       )}
@@ -195,6 +201,28 @@ function Panel({ title, subtitle, children }) {
 
 function EmptyState({ message }) {
   return <div className="empty-state"><span>◇</span><p>{message}</p><small>The office will update automatically.</small></div>;
+}
+
+function statusReason(reason) {
+  return {
+    active_run: 'Running task',
+    assigned: 'Queued for work',
+    blocked: 'Blocked and waiting',
+    stale_heartbeat: 'Heartbeat lost',
+    heartbeat_missing: 'Waiting for first heartbeat',
+    worker_missing: 'Worker has not started',
+    worker_stopped: 'Worker process stopped',
+    run_failed: 'Latest run failed',
+    session_active: 'Friday session active',
+    gateway_offline: 'Hermes gateway unavailable',
+    available: 'Available',
+  }[reason] || 'Status unavailable';
+}
+
+function formatTimestamp(value) {
+  if (!value) return 'Not active';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 'Not available' : date.toLocaleString();
 }
 
 export default App;
