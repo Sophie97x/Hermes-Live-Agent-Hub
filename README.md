@@ -1,25 +1,67 @@
-# Hermes Agent Hub
+# Hermes Live Agent Hub
 
-A lightweight live office dashboard for a local Hermes Agent installation. It discovers the current agent roster, reads local task and session state, and places agents in animated office departments based on what they are doing.
+> A small, local-first office dashboard I built to make my Hermes agents feel like a real team rather than a list of terminal sessions.
 
-## Features
+![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-local_backend-009688?logo=fastapi&logoColor=white)
+![Status](https://img.shields.io/badge/status-personal_project-7565e8)
+![Data](https://img.shields.io/badge/data-local_only-5dd49a)
 
-- Live agent office with seven departments and lightweight 2D animation
-- Automatic discovery of new Hermes profiles
-- Break Room routing for idle agents
-- Clickable agent profiles and task details
-- Backlog, in-progress, review, completed and archive columns
-- Persistent minimized Task Board columns
-- Midnight, Daylight and Botanical office themes
-- Full-screen office view
-- Server-sent live updates with low-frequency background polling
+![Hermes Live Agent Hub office view](docs/screenshots/office.png)
 
-## Run locally
+## Why I made it
 
-Requirements: Python 3.11+ and Node.js 18+.
+I wanted a quick way to look at Hermes and understand what the whole team was doing without digging through terminals, databases or log files. The hub turns that state into a live office: active agents move to the department that matches their work, idle agents head to the Break Room, and Friday stays in Operations coordinating the team.
+
+It is deliberately lightweight. The characters and movement use small CSS animations, the backend reads Hermes state directly, and there is no WebGL engine or heavy UI framework running in the background.
+
+## What it does
+
+- Discovers new Hermes agent profiles automatically
+- Shows working, waiting and idle agents in a live office
+- Routes agents between seven departments based on their current task
+- Keeps idle agents together in the Break Room
+- Opens agent profiles and readable speech bubbles on click
+- Shows backlog, active, review, completed and archived work
+- Remembers whether Completed and Archive are minimized
+- Includes Midnight, Daylight and Botanical office themes
+- Supports a clutter-free full-screen office view
+- Uses server-sent events for live updates and pauses background polling when the tab is hidden
+
+## Task history
+
+The Task Board gives me one place to see current work and the projects the team has already completed. Completed and Archive can be minimized independently, and that choice is remembered after navigating away or refreshing the page.
+
+![Hermes Live Agent Hub task board](docs/screenshots/task-board.png)
+
+## How it works
+
+```text
+Hermes local state (~/.hermes)
+        │
+        ├── sessions and task databases
+        ├── cron jobs
+        └── agent profiles
+                │
+                ▼
+        FastAPI read-only adapter
+                │
+                ├── JSON endpoints
+                └── live server-sent events
+                        │
+                        ▼
+                  React office UI
+```
+
+The backend reads local SQLite and JSON files without modifying them. Agent profiles are scanned from the Hermes profiles directory, so adding or removing an agent does not require editing the frontend.
+
+## Run it locally
+
+You will need Python 3.11+ and Node.js 18+.
 
 ```bash
-cd frontend
+git clone https://github.com/Sophie97x/Hermes-Live-Agent-Hub.git
+cd Hermes-Live-Agent-Hub/frontend
 npm install
 npm run build
 
@@ -30,9 +72,9 @@ pip install -r requirements.txt
 python -m uvicorn main:app --host 127.0.0.1 --port 3001
 ```
 
-Open <http://localhost:3001>.
+Then open [http://localhost:3001](http://localhost:3001).
 
-The backend reads Hermes state from `~/.hermes` by default. Override locations when needed:
+By default the hub reads Hermes state from `~/.hermes`. Both local locations can be overridden:
 
 ```bash
 HERMES_HOME=/path/to/.hermes \
@@ -40,12 +82,17 @@ OBSIDIAN_PROJECTS=/path/to/obsidian/projects \
 python -m uvicorn main:app --host 127.0.0.1 --port 3001
 ```
 
-No API keys are required by this dashboard. It reads local Hermes SQLite and JSON files in read-only mode.
+## Project structure
 
-## Architecture
+```text
+backend/                  FastAPI app and local state readers
+frontend/                 React and Vite interface
+frontend/src/components/  Office, Task Board, Activity and Schedule views
+docs/screenshots/         Screenshots used in this README
+```
 
-- `backend/`: FastAPI, SQLite/JSON readers and server-sent events
-- `frontend/`: React and Vite UI
-- Production frontend assets are built into `frontend/dist` and served by FastAPI
+## Privacy
 
-The UI intentionally avoids WebGL, physics engines and large component frameworks to keep CPU and memory use low.
+The hub does not need an API key and does not send Hermes data to a hosted service. Local databases, environment files, build output and generated working files are excluded from Git.
+
+This is a personal project built around my own Hermes setup, but I have kept the paths configurable so it can be adapted to another local installation.
