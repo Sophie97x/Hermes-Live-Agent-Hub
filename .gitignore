@@ -1,0 +1,32 @@
+# Local Python state
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Frontend dependencies and builds
+frontend/node_modules/
+frontend/dist/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+
+# Hermes runtime data must never be committed
+.hermes/
+*.db
+*.sqlite
+*.sqlite3
+
+# Local creative-production output contains machine-specific paths
+outputs/
+
+# Editor and OS files
+.DS_Store
+.idea/
+.vscode/
+*.log

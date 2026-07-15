@@ -1,0 +1,437 @@
+"""
+Hermes Agent Hub Backend — reads real local Hermes state.
+Direct SQLite + JSON readers against ~/.hermes/.
+No demo data, no simulated agents.
+"""
+import asyncio
+import json
+import os
+import sqlite3
+import time
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import AsyncGenerator, Optional
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from sse_starlette.sse import EventSourceResponse
+
+app = FastAPI(title="Hermes Agent Hub")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+HERMES_HOME = Path(os.environ.get("HERMES_HOME", "~/.hermes")).expanduser()
+STATE_DB = HERMES_HOME / "state.db"
+KANBAN_DB = HERMES_HOME / "kanban.db"
+CRON_JOBS = HERMES_HOME / "cron" / "jobs.json"
+GATEWAY_STATE = HERMES_HOME / "gateway_state.json"
+PROFILES_DIR = HERMES_HOME / "profiles"
+OBSIDIAN_PROJECTS = Path(
+    os.environ.get(
+        "OBSIDIAN_PROJECTS",
+        Path.home() / "Documents" / "Obsidian Vault" / "Projects",
+    )
+).expanduser()
+
+
+# ── helpers ──────────────────────────────────────────────────────────
+
+def _query(db_path: Path, sql: str, params: tuple = ()) -> list[dict]:
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(sql, params).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text()) if path.exists() else {}
+    except Exception:
+        return {}
+
+
+def _iso(ts: Optional[float]) -> str:
+    if ts:
+        return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+    return datetime.now(timezone.utc).isoformat()
+
+
+# ── state readers ─────────────────────────────────────────────────────
+
+_SESSION_SOURCE_AGENT_NAMES = {"default", "desktop", "cli", "tui", "subagent", "gateway"}
+
+_STATUS_MAP = {
+    "active": "working",
+    "blocked": "waiting",
+    "done": "idle",
+    "archived": "idle",
+    "cancelled": "idle",
+}
+
+_KANBAN_COLUMN = {
+    "ready": "backlog",
+    "queued": "backlog",
+    "active": "in_progress",
+    "blocked": "in_progress",
+    "in_review": "review",
+    "review": "review",
+    "done": "completed",
+    "archived": "archive",
+    "cancelled": "archive",
+}
+
+
+_KNOWN_AGENT_METADATA = {
+    "atlas": {"role": "Project Manager", "specialty": "Planning & delegation", "home": "meeting"},
+    "orion": {"role": "Workspace Scout", "specialty": "Discovery & setup", "home": "research"},
+    "devin": {"role": "Developer", "specialty": "Production coding", "home": "coding"},
+    "quinn": {"role": "Quality Engineer", "specialty": "Testing & review", "home": "coding"},
+    "scribe": {"role": "Documentarian", "specialty": "Obsidian & handoff", "home": "research"},
+}
+
+_KNOWN_AGENT_ORDER = {name: index for index, name in enumerate(_KNOWN_AGENT_METADATA)}
+
+
+def _profile_description(path: Path) -> str:
+    """Read the folded description field without adding a YAML dependency."""
+    try:
+        lines = path.read_text(errors="replace").splitlines()
+    except OSError:
+        return ""
+
+    parts: list[str] = []
+    collecting = False
+    for line in lines:
+        if line.startswith("description:"):
+            collecting = True
+            value = line.split(":", 1)[1].strip().strip('"\'')
+            if value not in {"", ">", "|", ">-", "|-"}:
+                parts.append(value)
+            continue
+        if collecting:
+            if line.startswith((" ", "\t")):
+                parts.append(line.strip())
+            else:
+                break
+    return " ".join(parts).strip()
+
+
+def _generic_agent_metadata(description: str) -> dict:
+    text = description.lower()
+    if any(word in text for word in ("product", "ux", "user journey", "wireframe", "accessibility")):
+        return {"role": "Product & UX Specialist", "home": "meeting"}
+    if any(word in text for word in ("media", "visual", "image", "video", "creative")):
+        return {"role": "Creative Specialist", "home": "coding"}
+    if any(word in text for word in ("writer", "document", "knowledge", "obsidian")):
+        return {"role": "Knowledge Specialist", "home": "research"}
+    if any(word in text for word in ("research", "analyst", "discovery", "investigat")):
+        return {"role": "Research Specialist", "home": "research"}
+    if any(word in text for word in ("manager", "coordinat", "planner", "acceptance")):
+        return {"role": "Team Coordinator", "home": "meeting"}
+    if any(word in text for word in ("qa", "quality", "review", "test", "security")):
+        return {"role": "Quality Specialist", "home": "coding"}
+    if any(word in text for word in ("operations", "platform", "deploy", "system", "monitor")):
+        return {"role": "Operations Specialist", "home": "operations"}
+    if any(word in text for word in ("code", "developer", "engineer", "implementation")):
+        return {"role": "Engineering Specialist", "home": "coding"}
+    return {"role": "Hermes Specialist", "home": "coding"}
+
+
+def discover_team() -> list[dict]:
+    """Discover the current Hermes profile roster directly from disk."""
+    friday = {"name": "Friday", "role": "Chief of Staff", "specialty": "Orchestration", "home": "operations"}
+    members: list[dict] = []
+    if not PROFILES_DIR.exists():
+        return [friday]
+
+    for profile_path in PROFILES_DIR.glob("*/profile.yaml"):
+        key = profile_path.parent.name.strip().lower()
+        if not key or key in _SESSION_SOURCE_AGENT_NAMES or key.startswith("."):
+            continue
+        description = _profile_description(profile_path)
+        metadata = _KNOWN_AGENT_METADATA.get(key, _generic_agent_metadata(description))
+        members.append({
+            "name": key.replace("_", " ").replace("-", " ").title(),
+            "role": metadata["role"],
+            "specialty": metadata.get("specialty") or description or "General Hermes work",
+            "home": metadata["home"],
+            "profile": key,
+        })
+
+    members.sort(key=lambda member: (
+        _KNOWN_AGENT_ORDER.get(member["profile"], len(_KNOWN_AGENT_ORDER)),
+        member["name"].lower(),
+    ))
+    return [friday, *members]
+
+
+def read_agents() -> list[dict]:
+    """Return Friday plus every real Hermes profile, never raw transport sessions."""
+    task_rows = _query(KANBAN_DB, """
+        SELECT assignee, title, status, created_at FROM tasks
+        WHERE assignee IS NOT NULL AND assignee != ''
+          AND status NOT IN ('archived', 'done', 'cancelled')
+        ORDER BY created_at DESC
+    """)
+    latest_task: dict[str, dict] = {}
+    for row in task_rows:
+        latest_task.setdefault(str(row["assignee"]).lower(), row)
+
+    active_sessions = _query(STATE_DB, """
+        SELECT title, source, started_at FROM sessions
+        WHERE ended_at IS NULL
+        ORDER BY started_at DESC LIMIT 1
+    """)
+    main_session = active_sessions[0] if active_sessions else None
+    open_tasks = list(latest_task.values())
+
+    agents: list[dict] = []
+    for index, member in enumerate(discover_team()):
+        key = member["name"].lower()
+        task = latest_task.get(key)
+
+        if key == "friday":
+            status = "working" if main_session else "idle"
+            current_task = (main_session or {}).get("title") or "Handling a live Hermes session"
+            started_at = _iso((main_session or {}).get("started_at"))
+        elif key == "atlas":
+            status = "working" if open_tasks else "idle"
+            current_task = (
+                f"Coordinating {len(open_tasks)} open team task{'s' if len(open_tasks) != 1 else ''}"
+                if open_tasks else "Team pipeline is clear"
+            )
+            started_at = _iso(None)
+        elif task:
+            status = _STATUS_MAP.get(task["status"], "working")
+            current_task = task["title"]
+            started_at = _iso(task.get("created_at"))
+        else:
+            status = "idle"
+            current_task = "Available for the next assignment"
+            started_at = _iso(None)
+
+        agents.append({
+            "id": f"agent-{key}",
+            "name": member["name"],
+            "role": member["role"],
+            "specialty": member["specialty"],
+            "home": member["home"],
+            "status": status,
+            "current_task": current_task,
+            "started_at": started_at,
+            "position": {"top": 10 + index * 12, "left": 10 + (index % 3) * 20},
+        })
+
+    return agents
+
+
+def read_activity() -> list[dict]:
+    rows = _query(STATE_DB, """
+        SELECT id, title, source, started_at, ended_at, end_reason,
+               message_count, tool_call_count
+        FROM sessions ORDER BY started_at DESC LIMIT 15
+    """)
+    items: list[dict] = []
+    for r in rows:
+        items.append({
+            "id": str(uuid.uuid4()),
+            "timestamp": _iso(r["started_at"]),
+            "agent": r["source"] or "system",
+            "type": "session_start",
+            "detail": r["title"] or f"Session ({r['source']})",
+        })
+        if r["ended_at"]:
+            items.append({
+                "id": str(uuid.uuid4()),
+                "timestamp": _iso(r["ended_at"]),
+                "agent": r["source"] or "system",
+                "type": "session_end",
+                "detail": r.get("end_reason") or "completed",
+            })
+    return items[:20]
+
+
+def read_sessions() -> list[dict]:
+    rows = _query(STATE_DB, """
+        SELECT id, title, source, started_at, ended_at, end_reason,
+               message_count, tool_call_count
+        FROM sessions ORDER BY started_at DESC LIMIT 50
+    """)
+    return [
+        {
+            "id": r["id"],
+            "title": r["title"] or f"Session ({r['source']})",
+            "source": r["source"],
+            "status": "active" if r["ended_at"] is None else "completed",
+            "started_at": _iso(r["started_at"]),
+            "updated": _iso(r["ended_at"] or r["started_at"]),
+            "messages": r["message_count"],
+            "tool_calls": r["tool_call_count"],
+        }
+        for r in rows
+    ]
+
+
+def read_cron() -> list[dict]:
+    data = _read_json(CRON_JOBS)
+    jobs = data.get("jobs", [])
+    return [
+        {
+            "id": j.get("id", f"cron-{i}"),
+            "name": j.get("name", f"Job {i}"),
+            "schedule": j.get("schedule", "N/A"),
+            "status": j.get("status", "inactive"),
+            "last_run": j.get("last_run"),
+            "next_run": j.get("next_run"),
+        }
+        for i, j in enumerate(jobs)
+    ]
+
+
+def read_kanban() -> dict:
+    rows = _query(KANBAN_DB, """
+        SELECT id, title, body, assignee, status, priority, created_at,
+               started_at, completed_at, workspace_path, project_id, result,
+               last_failure_error,
+               (SELECT MAX(created_at) FROM task_events e
+                WHERE e.task_id = tasks.id AND e.kind = 'archived') AS archived_at
+        FROM tasks
+        ORDER BY COALESCE(completed_at, archived_at, created_at) DESC
+    """)
+    board: dict[str, list] = {
+        "backlog": [], "in_progress": [], "review": [], "completed": [], "archive": [],
+    }
+    for r in rows:
+        col = _KANBAN_COLUMN.get(r["status"], "backlog")
+        if col not in board:
+            board[col] = []
+        board[col].append({
+            "id": r["id"],
+            "title": r["title"],
+            "assignee": r["assignee"] or "",
+            "priority": str(r["priority"] or "0"),
+            "status": r["status"],
+            "detail": r["body"] or "",
+            "project": r["project_id"] or "",
+            "workspace": r["workspace_path"] or "",
+            "result": r["result"] or "",
+            "failure": r["last_failure_error"] or "",
+            "created_at": _iso(r["created_at"]),
+            "finished_at": _iso(r["completed_at"] or r["archived_at"]) if (r["completed_at"] or r["archived_at"]) else None,
+        })
+    return board
+
+
+def read_projects() -> list[dict]:
+    """Read the durable project history already maintained in Obsidian."""
+    if not OBSIDIAN_PROJECTS.exists():
+        return []
+    projects: list[dict] = []
+    for note in sorted(OBSIDIAN_PROJECTS.glob("*.md")):
+        try:
+            content = note.read_text(errors="replace")
+        except OSError:
+            continue
+        lines = [line.strip() for line in content.splitlines()]
+        title = next((line[2:].strip() for line in lines if line.startswith("# ")), note.stem)
+        summary = next((line for line in lines if line and not line.startswith(("#", "-", "```"))), "Recorded Hermes project")
+        lower = content.lower()
+        status = "active" if any(term in lower for term in ("✅ running", "active repo", "current status", "current app")) else "recorded"
+        projects.append({
+            "id": f"project-{note.stem.lower().replace(' ', '-')}",
+            "name": title,
+            "summary": summary[:240],
+            "status": status,
+            "updated_at": _iso(note.stat().st_mtime),
+            "note_path": str(note),
+        })
+    return sorted(projects, key=lambda project: project["updated_at"], reverse=True)
+
+
+def read_gateway() -> dict:
+    return _read_json(GATEWAY_STATE)
+
+
+# ── REST endpoints ────────────────────────────────────────────────────
+
+@app.get("/api/agents")
+async def get_agents():
+    return read_agents()
+
+
+@app.get("/api/activity")
+async def get_activity(limit: int = 20):
+    return read_activity()[:limit]
+
+
+@app.get("/api/sessions")
+async def get_sessions():
+    return read_sessions()
+
+
+@app.get("/api/cron")
+async def get_cron_jobs():
+    return read_cron()
+
+
+@app.get("/api/kanban")
+async def get_kanban():
+    return read_kanban()
+
+
+@app.get("/api/projects")
+async def get_projects():
+    return read_projects()
+
+
+@app.get("/api/gateway")
+async def get_gateway():
+    return read_gateway()
+
+
+# ── SSE ───────────────────────────────────────────────────────────────
+
+async def event_generator() -> AsyncGenerator[str, None]:
+    _last_agents_key: str = ""
+    while True:
+        agents = read_agents()
+        now = datetime.now(timezone.utc).isoformat()
+        key = json.dumps(agents, sort_keys=True, default=str)
+
+        if key != _last_agents_key:
+            payload = {
+                "type": "heartbeat",
+                "timestamp": now,
+                "agents": agents,
+                "sessions_count": len(read_sessions()),
+                "gateway": read_gateway(),
+            }
+            yield json.dumps(payload)
+            _last_agents_key = key
+        else:
+            yield json.dumps({"type": "heartbeat", "timestamp": now})
+
+        await asyncio.sleep(5)
+
+
+@app.get("/api/events")
+async def sse_events(request: Request):
+    return EventSourceResponse(event_generator())
+
+
+# Serve the compiled dashboard from this same lightweight process. API routes
+# are registered first, so the SPA mount cannot shadow them.
+FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if FRONTEND_DIST.exists():
+    app.mount("/", StaticFiles(directory=str(FRONTEND_DIST), html=True), name="frontend")

@@ -1,0 +1,39 @@
+.agent-card {
+  background-color: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 15px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+}
+
+.agent-card h3 {
+  margin-top: 0;
+  color: #1a202c;
+  font-size: 1.2em;
+}
+
+.agent-card p {
+  margin: 5px 0;
+  color: #4a5568;
+  font-size: 0.9em;
+}
+
+.agent-status-idle {
+  color: var(--agent-color-idle);
+  font-weight: bold;
+}
+
+.agent-status-working {
+  color: var(--agent-color-working);
+  font-weight: bold;
+}
+
+.agent-status-waiting {
+  color: var(--agent-color-waiting);
+  font-weight: bold;
+}
+
+.agent-status-error {
+  color: var(--agent-color-error);
+  font-weight: bold;
+}
