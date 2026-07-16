@@ -622,6 +622,9 @@ def read_project_rooms() -> list[dict]:
     open_states = {"todo", "ready", "queued", "active", "running", "in_progress", "in_review", "review"}
     attention_states = {"blocked", "failed", "crashed", "timed_out"}
     for room in rooms.values():
+        project_id = str(room.get("project_id") or "")
+        if project_id and not project_id.startswith("p_") and any(separator in project_id for separator in ("-", "_")):
+            room["name"] = project_id.replace("-", " ").replace("_", " ").title()
         statuses = {task["status"] for task in room["tasks"]}
         if statuses & attention_states:
             room["status"] = "attention"

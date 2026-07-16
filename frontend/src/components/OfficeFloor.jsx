@@ -78,7 +78,7 @@ function destinationFor(agent) {
   return 'coding';
 }
 
-function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [] }) {
+function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [], projectRooms = [], onSelectProject }) {
   const mapRef = useRef(null);
   const [openBubble, setOpenBubble] = useState(null);
   const [controlsOpen, setControlsOpen] = useState(false);
@@ -181,6 +181,11 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [] 
     const matchesRoom = roomFilter === 'all' || agent.room === roomFilter;
     return matchesStatus && matchesRoom;
   });
+  const meetingTaskIds = new Set(placedAgents.filter((agent) => agent.room === 'meeting' && agent.task_id).map((agent) => agent.task_id));
+  const featuredProject = projectRooms
+    .map((room) => ({ ...room, meetingMatches: room.tasks?.filter((task) => meetingTaskIds.has(task.id)).length || 0 }))
+    .filter((room) => room.meetingMatches > 0)
+    .sort((left, right) => right.meetingMatches - left.meetingMatches || String(right.updated_at || '').localeCompare(String(left.updated_at || '')))[0];
 
   const resetView = () => {
     setStatusFilter('all');
@@ -242,6 +247,14 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [] 
         <div className="walking-path path-horizontal" />
         <div className="walking-path path-vertical" />
 
+        {featuredProject && <button className="meeting-project-board" onClick={() => onSelectProject?.(featuredProject)} aria-label={`Open ${projectName(featuredProject)} project`}>
+          <span>ACTIVE PROJECT</span>
+          <strong>{projectName(featuredProject)}</strong>
+          <small>{featuredProject.tasks.filter((task) => task.status === 'done').length} of {featuredProject.tasks.length} tasks complete</small>
+          <i><i style={{ width: `${featuredProject.progress}%` }} /></i>
+          <em>{featuredProject.progress}%</em>
+        </button>}
+
         {visibleAgents.map((agent, index) => {
           const palette = CHARACTER_PALETTES[index % CHARACTER_PALETTES.length];
           const moving = movingAgents.includes(agent.id);
@@ -298,6 +311,12 @@ function AgentProgress({ agent, labelled = false }) {
 
 function titleCase(value) {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function projectName(room) {
+  const id = String(room?.project_id || '');
+  if (id && !id.startsWith('p_')) return id.replace(/[-_]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+  return room?.name || 'Active project';
 }
 
 function speechIntro(agent) {

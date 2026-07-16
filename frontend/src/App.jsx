@@ -283,7 +283,7 @@ function App() {
 
         {view === 'office' && (
           <div className="office-page">
-            <OfficeFloor agents={agents} onSelectAgent={setSelectedAgent} selectedAgent={selectedAgent} timeline={timeline} />
+            <OfficeFloor agents={agents} onSelectAgent={setSelectedAgent} selectedAgent={selectedAgent} timeline={timeline} projectRooms={projectRooms} onSelectProject={setSelectedProject} />
           </div>
         )}
 
