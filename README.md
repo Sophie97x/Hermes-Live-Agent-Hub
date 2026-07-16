@@ -21,7 +21,7 @@ It is deliberately lightweight. The characters and movement use small CSS animat
 - Shows verified working, queued, waiting, failed and idle states in a live office
 - Shows compact workflow-stage progress bars on agents, speech bubbles and active task cards
 - Routes agents between seven departments based on their current task
-- Shows the active project name and real total task progress on the Meeting Room table
+- Shows up to three active projects with real total task progress in the empty central corridor
 - Keeps idle agents together in the Break Room
 - Opens agent profiles and readable speech bubbles on click
 - Shows backlog, active, review, completed and archived work

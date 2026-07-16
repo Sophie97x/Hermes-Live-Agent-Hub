@@ -182,10 +182,11 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [],
     return matchesStatus && matchesRoom;
   });
   const meetingTaskIds = new Set(placedAgents.filter((agent) => agent.room === 'meeting' && agent.task_id).map((agent) => agent.task_id));
-  const featuredProject = projectRooms
+  const featuredProjects = projectRooms
     .map((room) => ({ ...room, meetingMatches: room.tasks?.filter((task) => meetingTaskIds.has(task.id)).length || 0 }))
-    .filter((room) => room.meetingMatches > 0)
-    .sort((left, right) => right.meetingMatches - left.meetingMatches || String(right.updated_at || '').localeCompare(String(left.updated_at || '')))[0];
+    .filter((room) => room.status === 'active')
+    .sort((left, right) => right.meetingMatches - left.meetingMatches || String(right.updated_at || '').localeCompare(String(left.updated_at || '')))
+    .slice(0, 3);
 
   const resetView = () => {
     setStatusFilter('all');
@@ -247,13 +248,15 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [],
         <div className="walking-path path-horizontal" />
         <div className="walking-path path-vertical" />
 
-        {featuredProject && <button className="meeting-project-board" onClick={() => onSelectProject?.(featuredProject)} aria-label={`Open ${projectName(featuredProject)} project`}>
-          <span>ACTIVE PROJECT</span>
-          <strong>{projectName(featuredProject)}</strong>
-          <small>{featuredProject.tasks.filter((task) => task.status === 'done').length} of {featuredProject.tasks.length} tasks complete</small>
-          <i><i style={{ width: `${featuredProject.progress}%` }} /></i>
-          <em>{featuredProject.progress}%</em>
-        </button>}
+        {featuredProjects.length > 0 && <div className={`meeting-project-stack ${featuredProjects.length === 1 ? 'single' : 'multiple'}`}>
+          {featuredProjects.map((project) => <button className="meeting-project-board" key={project.id} onClick={() => onSelectProject?.(project)} aria-label={`Open ${projectName(project)} project`}>
+            <span>ACTIVE PROJECT</span>
+            <strong>{projectName(project)}</strong>
+            <small>{project.tasks.filter((task) => task.status === 'done').length} of {project.tasks.length} tasks complete</small>
+            <i><i style={{ width: `${project.progress}%` }} /></i>
+            <em>{project.progress}%</em>
+          </button>)}
+        </div>}
 
         {visibleAgents.map((agent, index) => {
           const palette = CHARACTER_PALETTES[index % CHARACTER_PALETTES.length];
