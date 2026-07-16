@@ -62,6 +62,7 @@ function TaskCard({ task, column }) {
         <span className={`task-state state-${column}`} />
         <strong>{task.title}</strong>
         <small>{task.assignee ? titleCase(task.assignee) : 'Unassigned'} · {formatDate(task.finished_at || task.created_at)}</small>
+        {['in_progress', 'review'].includes(column) && <TaskStage task={task} />}
       </summary>
       <div className="task-detail">
         {task.detail && <p>{task.detail}</p>}
@@ -76,6 +77,14 @@ function TaskCard({ task, column }) {
       </div>
     </details>
   );
+}
+
+function TaskStage({ task }) {
+  if (!task.progress_label) return null;
+  return <span className={`kanban-progress ${task.progress_mode || ''}`}>
+    <span><b>{task.progress_label}</b><em>{task.progress_value}% workflow</em></span>
+    <i><i style={{ width: `${task.progress_value}%` }} /></i>
+  </span>;
 }
 
 function emptyMessage(column) {

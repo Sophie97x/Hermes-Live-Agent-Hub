@@ -23,7 +23,9 @@ const ROOMS = {
   },
   meeting: {
     label: 'Meeting Room', icon: '◇', subtitle: 'Waiting & collaborating',
-    spots: [[32, 68], [39, 68], [46, 68], [32, 79], [39, 79], [46, 79], [32, 89], [39, 89], [46, 89]],
+    // Ordered around the real round-table chairs, alternating sides to avoid overlap.
+    spots: [[36, 68.5], [41.7, 74], [38.7, 81.5], [33.2, 81.5], [31.6, 74], [38.7, 70.5], [41.7, 78.4], [36, 82.8], [31.6, 78.4], [33.2, 70.5]],
+    facings: ['front', 'left', 'left', 'right', 'right', 'left', 'left', 'front', 'right', 'right'],
   },
   quality: {
     label: 'Quality Lab', icon: '✓', subtitle: 'Testing & reviewing',
@@ -76,7 +78,7 @@ function destinationFor(agent) {
   return 'coding';
 }
 
-function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [] }) {
+function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [], projectRooms = [], onSelectProject }) {
   const mapRef = useRef(null);
   const [openBubble, setOpenBubble] = useState(null);
   const [controlsOpen, setControlsOpen] = useState(false);
@@ -153,7 +155,7 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [] 
     const spots = ROOMS[room].spots;
     const [left, top] = spots[slot % spots.length];
     const overflow = Math.floor(slot / spots.length);
-    return { ...agent, room, left: left + overflow * 1.6, top: top + overflow * 1.5 };
+    return { ...agent, room, left: left + overflow * 1.6, top: top + overflow * 1.5, seatFacing: ROOMS[room].facings?.[slot % spots.length] };
   });
 
   useEffect(() => {
@@ -179,6 +181,12 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [] 
     const matchesRoom = roomFilter === 'all' || agent.room === roomFilter;
     return matchesStatus && matchesRoom;
   });
+  const meetingTaskIds = new Set(placedAgents.filter((agent) => agent.room === 'meeting' && agent.task_id).map((agent) => agent.task_id));
+  const featuredProjects = projectRooms
+    .map((room) => ({ ...room, meetingMatches: room.tasks?.filter((task) => meetingTaskIds.has(task.id)).length || 0 }))
+    .filter((room) => room.status === 'active')
+    .sort((left, right) => right.meetingMatches - left.meetingMatches || String(right.updated_at || '').localeCompare(String(left.updated_at || '')))
+    .slice(0, 3);
 
   const resetView = () => {
     setStatusFilter('all');
@@ -240,13 +248,23 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [] 
         <div className="walking-path path-horizontal" />
         <div className="walking-path path-vertical" />
 
+        {featuredProjects.length > 0 && <div className={`meeting-project-stack ${featuredProjects.length === 1 ? 'single' : 'multiple'}`}>
+          {featuredProjects.map((project) => <button className="meeting-project-board" key={project.id} onClick={() => onSelectProject?.(project)} aria-label={`Open ${projectName(project)} project`}>
+            <span>ACTIVE PROJECT</span>
+            <strong>{projectName(project)}</strong>
+            <small>{project.tasks.filter((task) => task.status === 'done').length} of {project.tasks.length} tasks complete</small>
+            <i><i style={{ width: `${project.progress}%` }} /></i>
+            <em>{project.progress}%</em>
+          </button>)}
+        </div>}
+
         {visibleAgents.map((agent, index) => {
           const palette = CHARACTER_PALETTES[index % CHARACTER_PALETTES.length];
           const moving = movingAgents.includes(agent.id);
           const facing = facingFor(agent, index, moving);
           return (
           <div
-            className={`map-agent agent-${agent.name.toLowerCase().replace(/[^a-z0-9_-]+/g, '-')} ${agent.status} ${agent.room} facing-${facing} hair-${index % 4} ${moving ? 'moving' : ''} ${selectedAgent?.id === agent.id ? 'selected' : ''}`}
+            className={`map-agent agent-${agent.name.toLowerCase().replace(/[^a-z0-9_-]+/g, '-')} ${agent.status} ${agent.room} facing-${facing} hair-${index % 4} ${moving ? 'moving' : ''} ${agent.room === 'meeting' && !moving ? 'seated' : ''} ${selectedAgent?.id === agent.id ? 'selected' : ''}`}
             style={{ '--left': `${agent.left}%`, '--top': `${agent.top}%`, '--depth': 20 + Math.round(agent.top), '--delay': `${index * -0.8}s`, '--agent-accent': palette.accent, '--agent-dark': palette.dark, '--agent-hair': palette.hair, '--agent-skin': palette.skin }}
             key={agent.id}
             title={`${agent.name} · ${ROOMS[agent.room].label} · ${agent.current_task || agent.status}`}
@@ -259,6 +277,7 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [] 
             >
               <b>{speechIntro(agent)}</b>
               <span>{agent.current_task || ROOMS[agent.room].subtitle}</span>
+              {openBubble === agent.id && agent.progress_label && <AgentProgress agent={agent} labelled />}
               <small>{openBubble === agent.id ? 'Click to close' : 'Click to read'}</small>
             </button>}
             <button className="person-button" onClick={() => onSelectAgent?.(agent)} aria-label={`Open ${agent.name} profile`}>
@@ -269,6 +288,7 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [] 
               </span>
             </button>
             <span className="agent-nameplate"><b>{agent.name.length > 14 ? `${agent.name.slice(0, 12)}…` : agent.name}</b><small aria-label={agent.status} title={agent.status} /></span>
+            {agent.progress_label && <AgentProgress agent={agent} />}
           </div>
           );
         })}
@@ -282,8 +302,24 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [] 
   );
 }
 
+function AgentProgress({ agent, labelled = false }) {
+  const indeterminate = agent.progress_value == null;
+  return <span className={`map-task-progress ${agent.progress_mode || ''} ${labelled ? 'labelled' : ''}`} title={agent.progress_label}>
+    {labelled && <b>{agent.progress_label}{!indeterminate ? ` · ${agent.progress_value}% workflow` : ''}</b>}
+    <span role="progressbar" aria-label={`${agent.name}: ${agent.progress_label}`} aria-valuemin="0" aria-valuemax="100" {...(!indeterminate ? { 'aria-valuenow': agent.progress_value } : {})}>
+      <i style={!indeterminate ? { width: `${agent.progress_value}%` } : undefined} />
+    </span>
+  </span>;
+}
+
 function titleCase(value) {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function projectName(room) {
+  const id = String(room?.project_id || '');
+  if (id && !id.startsWith('p_')) return id.replace(/[-_]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+  return room?.name || 'Active project';
 }
 
 function speechIntro(agent) {
@@ -298,6 +334,7 @@ function speechIntro(agent) {
 
 function facingFor(agent, index, moving) {
   if (moving) return index % 2 ? 'left' : 'right';
+  if (agent.room === 'meeting' && agent.seatFacing) return agent.seatFacing;
   if (agent.status === 'working') return index % 2 ? 'left' : 'right';
   return 'front';
 }

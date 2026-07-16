@@ -283,7 +283,7 @@ function App() {
 
         {view === 'office' && (
           <div className="office-page">
-            <OfficeFloor agents={agents} onSelectAgent={setSelectedAgent} selectedAgent={selectedAgent} timeline={timeline} />
+            <OfficeFloor agents={agents} onSelectAgent={setSelectedAgent} selectedAgent={selectedAgent} timeline={timeline} projectRooms={projectRooms} onSelectProject={setSelectedProject} />
           </div>
         )}
 
@@ -296,7 +296,7 @@ function App() {
               {filteredAgents.length ? filteredAgents.map((agent, index) => (
                 <button className="roster-card" key={agent.id} onClick={() => setSelectedAgent(agent)}>
                   <span className={`mini-avatar tone-${index % 5}`}>{agent.name.slice(0, 2).toUpperCase()}</span>
-                  <span><strong>{agent.name}</strong><small>{agent.current_task || 'Available for work'}</small></span>
+                  <span><strong>{agent.name}</strong><small>{agent.current_task || 'Available for work'}</small><TaskProgress item={agent} compact /></span>
                   <em className={`status-text ${agent.status}`}>{agent.status}</em>
                 </button>
               )) : <EmptyState message={agentFilter === 'attention' ? 'Nobody needs attention.' : agentFilter === 'working' ? 'Nobody is working right now.' : 'No agents in this view.'} />}
@@ -323,6 +323,7 @@ function App() {
             <span className={`drawer-status ${selectedAgent.status}`}>{selectedAgent.status}</span>
             <div className="drawer-detail"><small>Live state</small><strong>{statusReason(selectedAgent.status_reason)}</strong></div>
             <div className="drawer-detail"><small>Current assignment</small><strong>{selectedAgent.current_task || 'Waiting for an assignment'}</strong></div>
+            {selectedAgent.progress_label && <div className="drawer-detail"><small>Task progress</small><TaskProgress item={selectedAgent} /></div>}
             <div className="drawer-detail"><small>Started</small><strong>{formatTimestamp(selectedAgent.started_at)}</strong></div>
             <div className="drawer-detail"><small>Last activity</small><strong>{formatTimestamp(selectedAgent.last_activity_at)}</strong></div>
             <div className="agent-conversation"><header><small>Recent conversation</small><span>{conversations[selectedAgent.name.toLowerCase()]?.length || 0} messages</span></header>{conversations[selectedAgent.name.toLowerCase()]?.length ? conversations[selectedAgent.name.toLowerCase()].slice(-8).map((message) => <article key={message.id} className={`message-${message.role}`}><strong>{message.role === 'assistant' ? message.speaker || selectedAgent.name : message.role === 'user' ? 'You' : message.tool_name || message.role}</strong><p>{message.content || (message.tool_name ? `Used ${message.tool_name}` : 'No text content')}</p><time>{formatTimestamp(message.timestamp)}</time></article>) : <p className="conversation-empty">No linked conversation history yet.</p>}</div>
@@ -342,6 +343,19 @@ function Panel({ title, subtitle, children }) {
 
 function EmptyState({ message }) {
   return <div className="empty-state"><span>◇</span><p>{message}</p><small>The office will update automatically.</small></div>;
+}
+
+function TaskProgress({ item, compact = false }) {
+  if (!item?.progress_label) return null;
+  const indeterminate = item.progress_value == null;
+  return (
+    <span className={`task-progress ${compact ? 'compact' : ''} ${item.progress_mode || ''}`}>
+      <span className="task-progress-meta"><b>{item.progress_label}</b>{!compact && !indeterminate && <em>{item.progress_value}% workflow</em>}</span>
+      <span className="task-progress-track" role="progressbar" aria-label={`${item.progress_label} workflow stage`} aria-valuemin="0" aria-valuemax="100" {...(!indeterminate ? { 'aria-valuenow': item.progress_value } : {})}>
+        <i style={!indeterminate ? { width: `${item.progress_value}%` } : undefined} />
+      </span>
+    </span>
+  );
 }
 
 function statusReason(reason) {
