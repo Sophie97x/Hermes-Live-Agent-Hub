@@ -42,6 +42,22 @@ function App() {
 
   useEffect(() => {
     let mounted = true;
+    let disconnectTimer = null;
+
+    const markOnline = () => {
+      window.clearTimeout(disconnectTimer);
+      disconnectTimer = null;
+      if (mounted) setConnected(true);
+    };
+
+    const markOfflineAfterGrace = () => {
+      if (disconnectTimer) return;
+      disconnectTimer = window.setTimeout(() => {
+        disconnectTimer = null;
+        if (mounted) setConnected(false);
+        fetchData();
+      }, 5000);
+    };
 
     const fetchData = async () => {
       try {
@@ -52,20 +68,20 @@ function App() {
           fetch(`${API}/api/cron`),
           fetch(`${API}/api/health`),
         ]);
-        if (!responses.every((response) => response.ok)) throw new Error('API unavailable');
+        if (!responses[0].ok) throw new Error('Core API unavailable');
         const [nextAgents, nextActivity, nextKanban, nextCron, nextHealth] = await Promise.all(
-          responses.map((response) => response.json()),
+          responses.map((response) => response.ok ? response.json() : null),
         );
         if (!mounted) return;
         setAgents(nextAgents || []);
-        setActivity(nextActivity || []);
-        setKanban(nextKanban || {});
-        setCron(nextCron || []);
-        setHealth(nextHealth || { uptime_seconds: 0, alerts: [], stuck_jobs: [] });
-        setConnected(true);
+        if (nextActivity) setActivity(nextActivity);
+        if (nextKanban) setKanban(nextKanban);
+        if (nextCron) setCron(nextCron);
+        if (nextHealth) setHealth(nextHealth);
+        markOnline();
         setLastUpdate(new Date());
       } catch {
-        if (mounted) setConnected(false);
+        markOfflineAfterGrace();
       }
     };
 
@@ -80,8 +96,8 @@ function App() {
     };
     document.addEventListener('visibilitychange', handleVisibility);
     const eventSource = new EventSource(`${API}/api/events`);
-    eventSource.onopen = () => mounted && setConnected(true);
-    eventSource.onerror = () => mounted && setConnected(false);
+    eventSource.onopen = markOnline;
+    eventSource.onerror = markOfflineAfterGrace;
     eventSource.onmessage = (event) => {
       const data = JSON.parse(event.data);
       if (!mounted || data.type !== 'heartbeat') return;
@@ -93,6 +109,7 @@ function App() {
 
     return () => {
       mounted = false;
+      window.clearTimeout(disconnectTimer);
       window.clearInterval(refreshTimer);
       document.removeEventListener('visibilitychange', handleVisibility);
       eventSource.close();
