@@ -365,14 +365,34 @@ def read_sessions() -> list[dict]:
 def read_cron() -> list[dict]:
     data = _read_json(CRON_JOBS)
     jobs = data.get("jobs", [])
+
+    def schedule_label(job: dict) -> str:
+        schedule = job.get("schedule")
+        if job.get("schedule_display"):
+            return str(job["schedule_display"])
+        if isinstance(schedule, str):
+            return schedule
+        if isinstance(schedule, dict):
+            if schedule.get("display"):
+                return str(schedule["display"])
+            if schedule.get("expr"):
+                return str(schedule["expr"])
+            if schedule.get("kind") == "interval" and schedule.get("minutes"):
+                return f'every {schedule["minutes"]}m'
+        return "Not scheduled"
+
     return [
         {
             "id": j.get("id", f"cron-{i}"),
             "name": j.get("name", f"Job {i}"),
-            "schedule": j.get("schedule", "N/A"),
-            "status": j.get("status", "inactive"),
-            "last_run": j.get("last_run"),
-            "next_run": j.get("next_run"),
+            "schedule": schedule_label(j),
+            "status": "paused" if not j.get("enabled", True) else j.get("state") or j.get("status") or "scheduled",
+            "enabled": bool(j.get("enabled", True)),
+            "last_run": j.get("last_run_at") or j.get("last_run"),
+            "next_run": j.get("next_run_at") or j.get("next_run"),
+            "last_status": j.get("last_status"),
+            "last_error": j.get("last_error") or j.get("last_delivery_error"),
+            "runs_completed": (j.get("repeat") or {}).get("completed", 0),
         }
         for i, j in enumerate(jobs)
     ]
