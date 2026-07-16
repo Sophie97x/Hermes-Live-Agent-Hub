@@ -259,6 +259,7 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [] 
             >
               <b>{speechIntro(agent)}</b>
               <span>{agent.current_task || ROOMS[agent.room].subtitle}</span>
+              {openBubble === agent.id && agent.progress_label && <AgentProgress agent={agent} labelled />}
               <small>{openBubble === agent.id ? 'Click to close' : 'Click to read'}</small>
             </button>}
             <button className="person-button" onClick={() => onSelectAgent?.(agent)} aria-label={`Open ${agent.name} profile`}>
@@ -269,6 +270,7 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [] 
               </span>
             </button>
             <span className="agent-nameplate"><b>{agent.name.length > 14 ? `${agent.name.slice(0, 12)}…` : agent.name}</b><small aria-label={agent.status} title={agent.status} /></span>
+            {agent.progress_label && <AgentProgress agent={agent} />}
           </div>
           );
         })}
@@ -280,6 +282,16 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [] 
       </div>
     </div>
   );
+}
+
+function AgentProgress({ agent, labelled = false }) {
+  const indeterminate = agent.progress_value == null;
+  return <span className={`map-task-progress ${agent.progress_mode || ''} ${labelled ? 'labelled' : ''}`} title={agent.progress_label}>
+    {labelled && <b>{agent.progress_label}{!indeterminate ? ` · ${agent.progress_value}% workflow` : ''}</b>}
+    <span role="progressbar" aria-label={`${agent.name}: ${agent.progress_label}`} aria-valuemin="0" aria-valuemax="100" {...(!indeterminate ? { 'aria-valuenow': agent.progress_value } : {})}>
+      <i style={!indeterminate ? { width: `${agent.progress_value}%` } : undefined} />
+    </span>
+  </span>;
 }
 
 function titleCase(value) {

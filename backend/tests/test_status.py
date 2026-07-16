@@ -112,8 +112,10 @@ class LiveAgentStatusTests(unittest.TestCase):
 
         agents = self.agents_by_name()
         self.assertEqual((agents["Atlas"]["status"], agents["Atlas"]["status_reason"]), ("queued", "assigned"))
+        self.assertEqual((agents["Atlas"]["progress_value"], agents["Atlas"]["progress_label"]), (12, "Queued"))
         self.assertEqual(agents["Quinn"]["status"], "waiting")
         self.assertEqual(agents["Devin"]["status"], "working")
+        self.assertEqual((agents["Devin"]["progress_value"], agents["Devin"]["progress_mode"]), (46, "active"))
         self.assertEqual(agents["Orion"]["status_reason"], "stale_heartbeat")
         self.assertEqual(agents["Scribe"]["status"], "error")
 

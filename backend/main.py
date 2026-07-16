@@ -294,6 +294,11 @@ def read_agents() -> list[dict]:
             last_activity_at = _iso(activity_at)
             task_id = None
             run_id = None
+            progress = {
+                "progress_value": None,
+                "progress_label": "Live session" if status == "working" else None,
+                "progress_mode": "activity" if status == "working" else None,
+            }
         elif task:
             status, status_reason = _task_runtime_status(task, now)
             current_task = task["title"]
@@ -301,6 +306,7 @@ def read_agents() -> list[dict]:
             last_activity_at = _iso(task.get("run_last_heartbeat_at") or task.get("last_heartbeat_at"))
             task_id = task.get("id")
             run_id = task.get("run_id")
+            progress = _task_progress(task.get("status"))
         else:
             status, status_reason = "idle", "available"
             current_task = "Available for the next assignment"
@@ -308,6 +314,7 @@ def read_agents() -> list[dict]:
             last_activity_at = None
             task_id = None
             run_id = None
+            progress = {"progress_value": None, "progress_label": None, "progress_mode": None}
 
         agents.append({
             "id": f"agent-{key}",
@@ -322,6 +329,7 @@ def read_agents() -> list[dict]:
             "last_activity_at": last_activity_at,
             "task_id": task_id,
             "run_id": run_id,
+            **progress,
             "position": {"top": 10 + index * 12, "left": 10 + (index % 3) * 20},
         })
 
@@ -356,6 +364,31 @@ def _task_runtime_status(task: dict, now: float) -> tuple[str, str]:
         return "working", "active_run"
 
     return "queued", "assigned"
+
+
+def _task_progress(task_status: Optional[str]) -> dict:
+    """Represent verified workflow stage, not an invented completion estimate."""
+    status = str(task_status or "").lower()
+    stages = {
+        "todo": (12, "Queued"),
+        "ready": (20, "Ready"),
+        "queued": (20, "Queued"),
+        "active": (46, "Running"),
+        "running": (46, "Running"),
+        "in_progress": (46, "Running"),
+        "blocked": (46, "Paused"),
+        "in_review": (82, "In review"),
+        "review": (82, "In review"),
+        "done": (100, "Complete"),
+        "archived": (100, "Archived"),
+        "cancelled": (100, "Cancelled"),
+    }
+    value, label = stages.get(status, (8, "Assigned"))
+    return {
+        "progress_value": value,
+        "progress_label": label,
+        "progress_mode": "active" if status in {"active", "running", "in_progress"} else "workflow",
+    }
 
 
 def read_activity() -> list[dict]:
@@ -472,6 +505,7 @@ def read_kanban() -> dict:
             "failure": r["last_failure_error"] or "",
             "created_at": _iso(r["created_at"]),
             "finished_at": _iso(r["completed_at"] or r["archived_at"]) if (r["completed_at"] or r["archived_at"]) else None,
+            **_task_progress(r["status"]),
         })
     return board
 

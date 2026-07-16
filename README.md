@@ -19,6 +19,7 @@ It is deliberately lightweight. The characters and movement use small CSS animat
 
 - Discovers new Hermes agent profiles automatically
 - Shows verified working, queued, waiting, failed and idle states in a live office
+- Shows compact workflow-stage progress bars on agents, speech bubbles and active task cards
 - Routes agents between seven departments based on their current task
 - Keeps idle agents together in the Break Room
 - Opens agent profiles and readable speech bubbles on click
@@ -38,7 +39,7 @@ It is deliberately lightweight. The characters and movement use small CSS animat
 
 ## What “live” means
 
-The green connection badge means the dashboard is connected to the local Hermes data, not that every assigned agent is running. A specialist only appears as working when Hermes has a running task, a live worker PID and a heartbeat from the last 120 seconds. Assigned cards without a worker are queued; blocked or stale work needs attention.
+The green connection badge means the dashboard is connected to the local Hermes data, not that every assigned agent is running. A specialist only appears as working when Hermes has a running task, a live worker PID and a heartbeat from the last 120 seconds. Assigned cards without a worker are queued; blocked or stale work needs attention. Progress bars show the verified workflow stage (queued, running, paused, review or complete), while a shimmer shows that an active worker is still alive; they do not invent a percentage from elapsed time.
 
 Friday uses real session messages rather than old unclosed session records. She remains active for five minutes after recent session activity, then returns to idle. This keeps the office useful without pretending that an old task or terminal session is still running.
 
