@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import ActivityFeed from './components/ActivityFeed';
 import KanbanBoard from './components/KanbanBoard';
 import CronJobs from './components/CronJobs';
 import OfficeFloor from './components/OfficeFloor';
+import ProjectRooms, { ProjectRoomDrawer } from './components/ProjectRooms';
+import TaskTimeline from './components/TaskTimeline';
+import CommandPalette from './components/CommandPalette';
 import './App.css';
 
 const API = import.meta.env.DEV ? 'http://localhost:3001' : '';
@@ -10,8 +12,9 @@ const API = import.meta.env.DEV ? 'http://localhost:3001' : '';
 const navItems = [
   ['office', 'Office', '⌂'],
   ['agents', 'Agents', '◉'],
+  ['projects', 'Projects', '◆'],
+  ['timeline', 'Timeline', 'ϟ'],
   ['tasks', 'Task board', '▦'],
-  ['activity', 'Activity', 'ϟ'],
   ['schedule', 'Schedules', '◷'],
 ];
 
@@ -25,20 +28,27 @@ function formatUptime(seconds = 0) {
 
 function App() {
   const [agents, setAgents] = useState([]);
-  const [activity, setActivity] = useState([]);
   const [kanban, setKanban] = useState({});
   const [cron, setCron] = useState([]);
+  const [projectRooms, setProjectRooms] = useState([]);
+  const [timeline, setTimeline] = useState([]);
+  const [conversations, setConversations] = useState({});
   const [view, setView] = useState('office');
   const [connected, setConnected] = useState(false);
   const [lastUpdate, setLastUpdate] = useState(null);
   const [selectedAgent, setSelectedAgent] = useState(null);
+  const [selectedProject, setSelectedProject] = useState(null);
   const [agentFilter, setAgentFilter] = useState('all');
   const [health, setHealth] = useState({ uptime_seconds: 0, alerts: [], stuck_jobs: [] });
   const [showHealth, setShowHealth] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [toast, setToast] = useState(null);
+  const [commandOpen, setCommandOpen] = useState(false);
+  const [desktopAlerts, setDesktopAlerts] = useState(() => window.localStorage.getItem('hermes-desktop-alerts') === 'on');
   const knownAlerts = useRef(new Set());
   const alertsReady = useRef(false);
+  const knownTimeline = useRef(new Set());
+  const timelineReady = useRef(false);
 
   useEffect(() => {
     let mounted = true;
@@ -67,17 +77,22 @@ function App() {
           fetch(`${API}/api/kanban`),
           fetch(`${API}/api/cron`),
           fetch(`${API}/api/health`),
+          fetch(`${API}/api/project-rooms`),
+          fetch(`${API}/api/timeline`),
+          fetch(`${API}/api/conversations`),
         ]);
         if (!responses[0].ok) throw new Error('Core API unavailable');
-        const [nextAgents, nextActivity, nextKanban, nextCron, nextHealth] = await Promise.all(
+        const [nextAgents, , nextKanban, nextCron, nextHealth, nextRooms, nextTimeline, nextConversations] = await Promise.all(
           responses.map((response) => response.ok ? response.json() : null),
         );
         if (!mounted) return;
         setAgents(nextAgents || []);
-        if (nextActivity) setActivity(nextActivity);
         if (nextKanban) setKanban(nextKanban);
         if (nextCron) setCron(nextCron);
         if (nextHealth) setHealth(nextHealth);
+        if (nextRooms) setProjectRooms(nextRooms);
+        if (nextTimeline) setTimeline(nextTimeline);
+        if (nextConversations) setConversations(nextConversations);
         markOnline();
         setLastUpdate(new Date());
       } catch {
@@ -103,6 +118,8 @@ function App() {
       if (!mounted || data.type !== 'heartbeat') return;
       if (Array.isArray(data.agents)) setAgents(data.agents);
       if (data.health) setHealth(data.health);
+      if (data.timeline) setTimeline(data.timeline);
+      if (data.project_rooms) setProjectRooms(data.project_rooms);
       setConnected(true);
       setLastUpdate(new Date(data.timestamp || Date.now()));
     };
@@ -117,15 +134,52 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const handleKey = (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setCommandOpen((value) => !value);
+      }
+      if (event.key === 'Escape') setCommandOpen(false);
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, []);
+
+  useEffect(() => {
     const nextIds = new Set((health.alerts || []).map((alert) => alert.id));
     const newAlert = (health.alerts || []).find((alert) => !knownAlerts.current.has(alert.id));
     if (alertsReady.current && newAlert) {
       setToast(newAlert);
       window.setTimeout(() => setToast(null), 6000);
+      if (desktopAlerts && window.Notification?.permission === 'granted') new window.Notification(newAlert.title, { body: newAlert.detail, tag: `hermes-${newAlert.id}` });
     }
     knownAlerts.current = nextIds;
     alertsReady.current = true;
-  }, [health.alerts]);
+  }, [health.alerts, desktopAlerts]);
+
+  useEffect(() => {
+    const nextIds = new Set(timeline.map((event) => event.id));
+    const important = timeline.find((event) => !knownTimeline.current.has(event.id) && ['completed', 'blocked', 'failed', 'crashed', 'timed_out', 'review'].includes(event.kind));
+    if (timelineReady.current && important) {
+      const title = important.kind === 'completed' ? 'Task completed' : 'Hermes task needs attention';
+      if (desktopAlerts && window.Notification?.permission === 'granted') new window.Notification(title, { body: `${important.agent}: ${important.task_title}`, tag: `hermes-${important.id}` });
+    }
+    knownTimeline.current = nextIds;
+    timelineReady.current = true;
+  }, [timeline, desktopAlerts]);
+
+  const toggleDesktopAlerts = async () => {
+    if (desktopAlerts) {
+      setDesktopAlerts(false);
+      window.localStorage.setItem('hermes-desktop-alerts', 'off');
+      return;
+    }
+    const permission = await window.Notification?.requestPermission();
+    const enabled = permission === 'granted';
+    setDesktopAlerts(enabled);
+    window.localStorage.setItem('hermes-desktop-alerts', enabled ? 'on' : 'off');
+    if (!enabled) setToast({ title: 'Notifications remain off', detail: 'Allow notifications in your browser to enable desktop alerts.' });
+  };
 
   const restartHub = async () => {
     setRestarting(true);
@@ -149,6 +203,7 @@ function App() {
     () => Object.values(kanban).reduce((count, tasks) => count + tasks.length, 0),
     [kanban],
   );
+  const allTasks = useMemo(() => Object.values(kanban).flat(), [kanban]);
   const filteredAgents = agents.filter((agent) => (
     agentFilter === 'all'
     || (agentFilter === 'attention' && ['waiting', 'error'].includes(agent.status))
@@ -158,6 +213,13 @@ function App() {
   const openAgentView = (filter) => {
     setAgentFilter(filter);
     setView('agents');
+  };
+
+  const runCommand = (command) => {
+    if (command.type === 'view') setView(command.value);
+    if (command.type === 'agent') setSelectedAgent(command.value);
+    if (command.type === 'project') { setSelectedProject(command.value); setView('projects'); }
+    if (command.type === 'task') setView('tasks');
   };
 
   return (
@@ -177,6 +239,7 @@ function App() {
             </button>
           ))}
         </nav>
+        <button className="command-trigger" onClick={() => setCommandOpen(true)} aria-label="Open command palette">⌘ K</button>
         <div className="sidebar-footer-wrap">
           <button className="sidebar-footer" onClick={() => setShowHealth((value) => !value)} aria-expanded={showHealth}>
             <span className={connected ? 'connection-dot online' : 'connection-dot'} />
@@ -190,6 +253,7 @@ function App() {
               <div className="health-alerts">
                 {health.alerts?.length ? health.alerts.map((alert) => <div className={`health-alert ${alert.level}`} key={alert.id}><span>!</span><p><strong>{alert.title}</strong><small>{alert.detail.replaceAll('_', ' ')}</small></p></div>) : <p className="health-clear">✓ No failures or stuck jobs</p>}
               </div>
+              <button className={`desktop-alert-button ${desktopAlerts ? 'on' : ''}`} onClick={toggleDesktopAlerts}>◉ Desktop alerts {desktopAlerts ? 'On' : 'Off'}</button>
               <button className="restart-button" onClick={restartHub} disabled={restarting}>{restarting ? 'Restarting…' : '↻ Restart hub'}</button>
             </aside>
           )}
@@ -219,7 +283,7 @@ function App() {
 
         {view === 'office' && (
           <div className="office-page">
-            <OfficeFloor agents={agents} onSelectAgent={setSelectedAgent} selectedAgent={selectedAgent} />
+            <OfficeFloor agents={agents} onSelectAgent={setSelectedAgent} selectedAgent={selectedAgent} timeline={timeline} />
           </div>
         )}
 
@@ -240,8 +304,11 @@ function App() {
           </Panel>
         )}
 
+        {view === 'projects' && <Panel title="Project rooms" subtitle={`${projectRooms.length} projects grouped from real Hermes tasks and sessions`}><ProjectRooms rooms={projectRooms} selectedId={selectedProject?.id} onSelect={setSelectedProject} /></Panel>}
+
+        {view === 'timeline' && <Panel title="Live task timeline" subtitle="Verified task events from assignment through completion"><TaskTimeline events={timeline} /></Panel>}
+
         {view === 'tasks' && <Panel title="Task board" subtitle={`${allTaskCount} task records across the live workflow and archive`}><KanbanBoard board={kanban} /></Panel>}
-        {view === 'activity' && <Panel title="Live activity" subtitle="Recent Hermes sessions and events"><ActivityFeed activity={activity} /></Panel>}
         {view === 'schedule' && <Panel title="Scheduled work" subtitle="Cron jobs managed by Hermes"><CronJobs jobs={cron} /></Panel>}
       </main>
 
@@ -258,9 +325,12 @@ function App() {
             <div className="drawer-detail"><small>Current assignment</small><strong>{selectedAgent.current_task || 'Waiting for an assignment'}</strong></div>
             <div className="drawer-detail"><small>Started</small><strong>{formatTimestamp(selectedAgent.started_at)}</strong></div>
             <div className="drawer-detail"><small>Last activity</small><strong>{formatTimestamp(selectedAgent.last_activity_at)}</strong></div>
+            <div className="agent-conversation"><header><small>Recent conversation</small><span>{conversations[selectedAgent.name.toLowerCase()]?.length || 0} messages</span></header>{conversations[selectedAgent.name.toLowerCase()]?.length ? conversations[selectedAgent.name.toLowerCase()].slice(-8).map((message) => <article key={message.id} className={`message-${message.role}`}><strong>{message.role === 'assistant' ? message.speaker || selectedAgent.name : message.role === 'user' ? 'You' : message.tool_name || message.role}</strong><p>{message.content || (message.tool_name ? `Used ${message.tool_name}` : 'No text content')}</p><time>{formatTimestamp(message.timestamp)}</time></article>) : <p className="conversation-empty">No linked conversation history yet.</p>}</div>
           </aside>
         </button>
       )}
+      <ProjectRoomDrawer room={selectedProject} onClose={() => setSelectedProject(null)} />
+      <CommandPalette open={commandOpen} onClose={() => setCommandOpen(false)} agents={agents} rooms={projectRooms} tasks={allTasks} onCommand={runCommand} />
       {toast && <button className="failure-toast" onClick={() => { setToast(null); setShowHealth(true); }}><span>!</span><p><strong>{toast.title}</strong><small>{toast.detail}</small></p></button>}
     </div>
   );

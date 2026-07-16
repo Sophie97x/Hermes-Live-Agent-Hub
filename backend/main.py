@@ -459,6 +459,184 @@ def read_projects() -> list[dict]:
     return sorted(projects, key=lambda project: project["updated_at"], reverse=True)
 
 
+def read_project_rooms() -> list[dict]:
+    """Group real Hermes tasks into durable project/session rooms."""
+    tasks = _query(KANBAN_DB, """
+        SELECT id, title, assignee, status, project_id, session_id,
+               workspace_path, created_at, started_at, completed_at,
+               result, last_failure_error
+        FROM tasks ORDER BY created_at DESC
+    """)
+    links = _query(KANBAN_DB, """
+        SELECT l.child_id, p.id AS parent_id, p.title AS parent_title,
+               p.project_id AS parent_project_id
+        FROM task_links l JOIN tasks p ON p.id = l.parent_id
+    """)
+    parent_for = {row["child_id"]: row for row in links}
+    connected = {task["id"]: task["id"] for task in tasks}
+
+    def root(task_id: str) -> str:
+        while connected.get(task_id, task_id) != task_id:
+            connected[task_id] = connected.get(connected[task_id], connected[task_id])
+            task_id = connected[task_id]
+        return task_id
+
+    for link in links:
+        left, right = root(link["parent_id"]), root(link["child_id"])
+        if left != right:
+            connected[right] = left
+    project_for_component: dict[str, str] = {}
+    project_names: dict[str, str] = {}
+    for task in tasks:
+        if task.get("project_id"):
+            project_for_component[root(task["id"])] = task["project_id"]
+            if task.get("assignee") == "atlas" or task["project_id"] not in project_names:
+                project_names[task["project_id"]] = task["title"]
+    session_ids = tuple({row["session_id"] for row in tasks if row.get("session_id")})
+    session_titles: dict[str, str] = {}
+    if session_ids:
+        placeholders = ",".join("?" for _ in session_ids)
+        session_titles = {
+            row["id"]: row["title"]
+            for row in _query(STATE_DB, f"SELECT id, title FROM sessions WHERE id IN ({placeholders})", session_ids)
+            if row.get("title")
+        }
+
+    rooms: dict[str, dict] = {}
+    for task in tasks:
+        parent = parent_for.get(task["id"], {})
+        project_id = task.get("project_id") or project_for_component.get(root(task["id"])) or parent.get("parent_project_id")
+        if project_id:
+            key = f"project:{project_id}"
+            name = project_names.get(project_id) or parent.get("parent_title") or task["title"]
+        elif task.get("session_id"):
+            key = f'session:{task["session_id"]}'
+            name = session_titles.get(task["session_id"]) or task["title"]
+        else:
+            key = f'batch:{task["created_at"]}'
+            name = parent.get("parent_title") or task["title"]
+
+        room = rooms.setdefault(key, {
+            "id": key,
+            "name": name,
+            "project_id": project_id,
+            "status": "completed",
+            "tasks": [],
+            "agents": [],
+            "workspace": task.get("workspace_path") or "",
+            "updated_at": 0,
+        })
+        if task.get("assignee") and task["assignee"].title() not in room["agents"]:
+            room["agents"].append(task["assignee"].title())
+        task_status = str(task.get("status") or "")
+        room["tasks"].append({
+            "id": task["id"], "title": task["title"], "assignee": task.get("assignee") or "",
+            "status": task_status, "created_at": _iso(task.get("created_at")),
+            "finished_at": _iso(task.get("completed_at")),
+            "result": task.get("result") or "", "failure": task.get("last_failure_error") or "",
+        })
+        room["updated_at"] = max(room["updated_at"], task.get("completed_at") or task.get("started_at") or task["created_at"])
+
+    open_states = {"todo", "ready", "queued", "active", "running", "in_progress", "in_review", "review"}
+    attention_states = {"blocked", "failed", "crashed", "timed_out"}
+    for room in rooms.values():
+        statuses = {task["status"] for task in room["tasks"]}
+        if statuses & attention_states:
+            room["status"] = "attention"
+        elif statuses & open_states:
+            room["status"] = "active"
+        elif statuses <= {"archived", "cancelled"}:
+            room["status"] = "archived"
+        completed = sum(task["status"] == "done" for task in room["tasks"])
+        room["progress"] = round(completed / len(room["tasks"]) * 100) if room["tasks"] else 0
+        room["updated_at"] = _iso(room["updated_at"])
+        room["tasks"].sort(key=lambda task: task["created_at"] or "", reverse=True)
+
+    return sorted(rooms.values(), key=lambda room: room["updated_at"] or "", reverse=True)[:30]
+
+
+def read_task_timeline(limit: int = 120) -> list[dict]:
+    rows = _query(KANBAN_DB, """
+        SELECT e.id, e.task_id, e.run_id, e.kind, e.payload, e.created_at,
+               t.title, t.assignee, t.project_id, t.session_id
+        FROM task_events e JOIN tasks t ON t.id = e.task_id
+        WHERE e.kind != 'heartbeat'
+        ORDER BY e.created_at DESC, e.id DESC LIMIT ?
+    """, (max(1, min(limit, 300)),))
+    items: list[dict] = []
+    for row in rows:
+        try:
+            payload = json.loads(row.get("payload") or "{}")
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
+        detail = (
+            payload.get("summary") or payload.get("error") or payload.get("reason")
+            or payload.get("outcome") or payload.get("filename") or row["kind"].replace("_", " ")
+        )
+        items.append({
+            "id": f'event-{row["id"]}', "task_id": row["task_id"], "run_id": row.get("run_id"),
+            "kind": row["kind"], "timestamp": _iso(row["created_at"]),
+            "task_title": row["title"], "agent": (row.get("assignee") or "Hermes").title(),
+            "project_id": row.get("project_id") or "", "session_id": row.get("session_id") or "",
+            "detail": str(detail)[:500],
+        })
+    return items
+
+
+def read_agent_conversations() -> dict[str, list[dict]]:
+    """Return concise recent messages tied to real agent worker sessions."""
+    task_rows = _query(KANBAN_DB, """
+        SELECT t.assignee, t.session_id, r.metadata
+        FROM tasks t LEFT JOIN task_runs r ON r.task_id = t.id
+        WHERE t.assignee IS NOT NULL
+        ORDER BY COALESCE(r.started_at, t.created_at) DESC
+    """)
+    sessions_by_agent: dict[str, list[str]] = {}
+    worker_sessions_by_agent: dict[str, set[str]] = {}
+    for row in task_rows:
+        agent = str(row.get("assignee") or "").lower()
+        candidates = [row.get("session_id")]
+        worker_candidates: list[str] = []
+        try:
+            metadata = json.loads(row.get("metadata") or "{}")
+            worker_candidates = [value for value in (metadata.get("worker_session_id"), metadata.get("session_id")) if value]
+            candidates.extend(worker_candidates)
+        except (TypeError, json.JSONDecodeError):
+            pass
+        worker_sessions_by_agent.setdefault(agent, set()).update(worker_candidates)
+        for session_id in candidates:
+            if session_id and session_id not in sessions_by_agent.setdefault(agent, []):
+                sessions_by_agent[agent].append(session_id)
+
+    recent_main = _query(STATE_DB, """
+        SELECT id FROM sessions WHERE source NOT IN ('cron', 'subagent')
+        ORDER BY started_at DESC LIMIT 4
+    """)
+    sessions_by_agent["friday"] = [row["id"] for row in recent_main]
+
+    conversations: dict[str, list[dict]] = {}
+    for agent, session_ids in sessions_by_agent.items():
+        selected = tuple(session_ids[:8])
+        if not selected:
+            continue
+        placeholders = ",".join("?" for _ in selected)
+        rows = _query(STATE_DB, f"""
+            SELECT m.id, m.session_id, m.role, m.content, m.tool_name, m.timestamp,
+                   s.title AS session_title
+            FROM messages m JOIN sessions s ON s.id = m.session_id
+            WHERE m.session_id IN ({placeholders}) AND m.active = 1
+              AND (m.content IS NOT NULL OR m.tool_name IS NOT NULL)
+            ORDER BY m.timestamp DESC LIMIT 24
+        """, selected)
+        conversations[agent] = [{
+            "id": row["id"], "role": row["role"], "content": (row.get("content") or "")[:700],
+            "tool_name": row.get("tool_name"), "timestamp": _iso(row["timestamp"]),
+            "session_title": row.get("session_title") or "Hermes session",
+            "speaker": agent.title() if row["session_id"] in worker_sessions_by_agent.get(agent, set()) else "Friday",
+        } for row in reversed(rows)]
+    return conversations
+
+
 def read_gateway() -> dict:
     return _read_json(GATEWAY_STATE)
 
@@ -558,6 +736,21 @@ async def get_projects():
     return read_projects()
 
 
+@app.get("/api/project-rooms")
+async def get_project_rooms():
+    return read_project_rooms()
+
+
+@app.get("/api/timeline")
+async def get_timeline(limit: int = 120):
+    return read_task_timeline(limit)
+
+
+@app.get("/api/conversations")
+async def get_conversations():
+    return read_agent_conversations()
+
+
 @app.get("/api/gateway")
 async def get_gateway():
     return read_gateway()
@@ -583,10 +776,13 @@ async def restart_hub():
 
 async def event_generator() -> AsyncGenerator[str, None]:
     _last_agents_key: str = ""
+    _last_timeline_key: str = ""
     while True:
         agents = read_agents()
+        timeline = read_task_timeline(60)
         now = datetime.now(timezone.utc).isoformat()
         key = json.dumps(agents, sort_keys=True, default=str)
+        timeline_key = json.dumps(timeline, sort_keys=True, default=str)
 
         payload = {"type": "heartbeat", "timestamp": now, "health": read_health()}
         if key != _last_agents_key:
@@ -596,6 +792,9 @@ async def event_generator() -> AsyncGenerator[str, None]:
                 "gateway": read_gateway(),
             })
             _last_agents_key = key
+        if timeline_key != _last_timeline_key:
+            payload.update({"timeline": timeline, "project_rooms": read_project_rooms()})
+            _last_timeline_key = timeline_key
         yield json.dumps(payload)
 
         await asyncio.sleep(5)

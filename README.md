@@ -23,6 +23,12 @@ It is deliberately lightweight. The characters and movement use small CSS animat
 - Keeps idle agents together in the Break Room
 - Opens agent profiles and readable speech bubbles on click
 - Shows backlog, active, review, completed and archived work
+- Groups connected tasks and sessions into clickable Project Rooms with progress and team membership
+- Shows a verified live task timeline from assignment and claim through completion or failure
+- Adds recent linked conversation history inside every agent profile
+- Replays real task history in the office so agents move through their past departments
+- Supports opt-in desktop alerts for failures, stuck work, reviews and completions
+- Includes a `⌘K` command palette for agents, projects, tasks and navigation
 - Remembers whether Completed and Archive are minimized
 - Includes Midnight, Daylight and Botanical office themes
 - Supports a clutter-free full-screen office view
@@ -47,7 +53,8 @@ The Task Board gives me one place to see current work and the projects the team 
 ```text
 Hermes local state (~/.hermes)
         │
-        ├── sessions and task databases
+        ├── sessions, messages and task databases
+        ├── task events and project links
         ├── cron jobs
         └── agent profiles
                 │
@@ -62,6 +69,10 @@ Hermes local state (~/.hermes)
 ```
 
 The backend reads local SQLite and JSON files without modifying them. Agent profiles are scanned from the Hermes profiles directory, so adding or removing an agent does not require editing the frontend.
+
+Project Rooms are derived from real project IDs, linked task graphs and originating Hermes sessions. The timeline excludes noisy heartbeat events, while office replay uses those same verified task events rather than fabricated animation data. Conversation history only shows locally stored messages already linked to an agent's task or worker session.
+
+Desktop alerts are off by default. They can be enabled from System Health and are limited to work that completes, enters review, becomes blocked or fails. Press `⌘K` anywhere in the hub to find an agent, project, task or view.
 
 ## Run it locally
 

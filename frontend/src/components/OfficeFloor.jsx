@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import officeBackground from '../assets/hermes-office-expanded-midnight.jpg';
 import daylightBackground from '../assets/hermes-office-expanded-daylight.jpg';
 import botanicalBackground from '../assets/hermes-office-expanded-botanical.jpg';
@@ -76,7 +76,7 @@ function destinationFor(agent) {
   return 'coding';
 }
 
-function OfficeFloor({ agents = [], onSelectAgent, selectedAgent }) {
+function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [] }) {
   const mapRef = useRef(null);
   const [openBubble, setOpenBubble] = useState(null);
   const [controlsOpen, setControlsOpen] = useState(false);
@@ -87,6 +87,8 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent }) {
   const [roomFilter, setRoomFilter] = useState('all');
   const [showBubbles, setShowBubbles] = useState(true);
   const [showLabels, setShowLabels] = useState(true);
+  const [replayActive, setReplayActive] = useState(false);
+  const [replayIndex, setReplayIndex] = useState(0);
   const [theme, setTheme] = useState(() => {
     const savedTheme = window.localStorage.getItem('hermes-office-theme');
     return THEMES[savedTheme] ? savedTheme : 'midnight';
@@ -121,8 +123,27 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent }) {
     const request = map.requestFullscreen || map.webkitRequestFullscreen;
     await request?.call(map);
   };
+  const replayable = useMemo(() => timeline.filter((event) => event.agent && ['claimed', 'started', 'completed', 'blocked', 'failed', 'review'].includes(event.kind)).slice(0, 30).reverse(), [timeline]);
+  const replayEvent = replayActive ? replayable[replayIndex] : null;
+  useEffect(() => {
+    if (!replayActive || !replayable.length) return undefined;
+    const timer = window.setTimeout(() => {
+      if (replayIndex >= replayable.length - 1) {
+        setReplayActive(false);
+        setReplayIndex(0);
+      } else {
+        setReplayIndex((index) => index + 1);
+      }
+    }, 1800);
+    return () => window.clearTimeout(timer);
+  }, [replayActive, replayIndex, replayable.length]);
+  const displayAgents = agents.map((agent) => agent.name.toLowerCase() === replayEvent?.agent.toLowerCase() ? {
+    ...agent,
+    status: ['blocked', 'failed'].includes(replayEvent.kind) ? 'waiting' : 'working',
+    current_task: replayEvent.task_title,
+  } : agent);
   const roomUse = Object.fromEntries(roomOrder.map((room) => [room, 0]));
-  const orderedAgents = [...agents].slice(0, 24).sort((left, right) => {
+  const orderedAgents = [...displayAgents].slice(0, 24).sort((left, right) => {
     const roomDifference = roomOrder.indexOf(destinationFor(left)) - roomOrder.indexOf(destinationFor(right));
     return roomDifference || left.id.localeCompare(right.id);
   });
@@ -172,6 +193,7 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent }) {
       <div className="office-toolbar">
         <div className="office-actions">
           <div className="office-legend"><span><i className="working" />Working</span><span><i className="queued" />Queued</span><span><i className="waiting" />Waiting</span><span><i />On break</span></div>
+          <button className={replayActive ? 'replay-button active' : 'replay-button'} onClick={() => { setReplayIndex(0); setReplayActive((value) => !value); }} disabled={!replayable.length}>{replayActive ? '■ Stop replay' : '▶ Replay day'}</button>
           <button className={controlsOpen ? 'view-button active' : 'view-button'} onClick={() => setControlsOpen(!controlsOpen)} aria-expanded={controlsOpen}>☷ <span>View</span></button>
           {controlsOpen && (
             <div className="view-menu">
@@ -206,6 +228,7 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent }) {
 
       <div ref={mapRef} className={`office-map theme-${theme}`} style={{ backgroundImage: `url(${THEMES[theme]?.image || officeBackground})` }}>
         <div className="office-vignette" />
+        {replayEvent && <div className="replay-banner"><span>REPLAY {replayIndex + 1}/{replayable.length}</span><strong>{replayEvent.agent} · {replayEvent.task_title}</strong><small>{titleCase(replayEvent.kind)} · {new Date(replayEvent.timestamp).toLocaleString()}</small></div>}
         {showLabels && roomOrder.map((room) => (
           <button className={`room-label room-${room} ${roomFilter === room ? 'selected' : ''}`} key={room} onClick={() => setRoomFilter(roomFilter === room ? 'all' : room)}>
             <span>{ROOMS[room].icon}</span>
