@@ -23,7 +23,9 @@ const ROOMS = {
   },
   meeting: {
     label: 'Meeting Room', icon: '◇', subtitle: 'Waiting & collaborating',
-    spots: [[32, 68], [39, 68], [46, 68], [32, 79], [39, 79], [46, 79], [32, 89], [39, 89], [46, 89]],
+    // Ordered around the real round-table chairs, alternating sides to avoid overlap.
+    spots: [[36, 68.5], [41.7, 74], [38.7, 81.5], [33.2, 81.5], [31.6, 74], [38.7, 70.5], [41.7, 78.4], [36, 82.8], [31.6, 78.4], [33.2, 70.5]],
+    facings: ['front', 'left', 'left', 'right', 'right', 'left', 'left', 'front', 'right', 'right'],
   },
   quality: {
     label: 'Quality Lab', icon: '✓', subtitle: 'Testing & reviewing',
@@ -153,7 +155,7 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [] 
     const spots = ROOMS[room].spots;
     const [left, top] = spots[slot % spots.length];
     const overflow = Math.floor(slot / spots.length);
-    return { ...agent, room, left: left + overflow * 1.6, top: top + overflow * 1.5 };
+    return { ...agent, room, left: left + overflow * 1.6, top: top + overflow * 1.5, seatFacing: ROOMS[room].facings?.[slot % spots.length] };
   });
 
   useEffect(() => {
@@ -246,7 +248,7 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [] 
           const facing = facingFor(agent, index, moving);
           return (
           <div
-            className={`map-agent agent-${agent.name.toLowerCase().replace(/[^a-z0-9_-]+/g, '-')} ${agent.status} ${agent.room} facing-${facing} hair-${index % 4} ${moving ? 'moving' : ''} ${selectedAgent?.id === agent.id ? 'selected' : ''}`}
+            className={`map-agent agent-${agent.name.toLowerCase().replace(/[^a-z0-9_-]+/g, '-')} ${agent.status} ${agent.room} facing-${facing} hair-${index % 4} ${moving ? 'moving' : ''} ${agent.room === 'meeting' && !moving ? 'seated' : ''} ${selectedAgent?.id === agent.id ? 'selected' : ''}`}
             style={{ '--left': `${agent.left}%`, '--top': `${agent.top}%`, '--depth': 20 + Math.round(agent.top), '--delay': `${index * -0.8}s`, '--agent-accent': palette.accent, '--agent-dark': palette.dark, '--agent-hair': palette.hair, '--agent-skin': palette.skin }}
             key={agent.id}
             title={`${agent.name} · ${ROOMS[agent.room].label} · ${agent.current_task || agent.status}`}
@@ -310,6 +312,7 @@ function speechIntro(agent) {
 
 function facingFor(agent, index, moving) {
   if (moving) return index % 2 ? 'left' : 'right';
+  if (agent.room === 'meeting' && agent.seatFacing) return agent.seatFacing;
   if (agent.status === 'working') return index % 2 ? 'left' : 'right';
   return 'front';
 }
