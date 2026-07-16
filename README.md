@@ -26,6 +26,8 @@ It is deliberately lightweight. The characters and movement use small CSS animat
 - Remembers whether Completed and Archive are minimized
 - Includes Midnight, Daylight and Botanical office themes
 - Supports a clutter-free full-screen office view
+- Shows hub uptime, gateway health, failed work and stuck jobs in one compact panel
+- Provides in-app failure alerts and a one-click self-recovering restart
 - Uses server-sent events for live updates and pauses background polling when the tab is hidden
 
 ## What “live” means

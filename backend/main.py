@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 
 app = FastAPI(title="Hermes Agent Hub")
+HUB_STARTED_AT = time.time()
 
 app.add_middleware(
     CORSMiddleware,
@@ -462,6 +463,69 @@ def read_gateway() -> dict:
     return _read_json(GATEWAY_STATE)
 
 
+def _timestamp(value) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def read_health() -> dict:
+    now = time.time()
+    gateway = read_gateway()
+    gateway_state = gateway.get("gateway_state") or gateway.get("state") or gateway.get("status")
+    gateway_online = gateway_state == "running" and _pid_is_alive(gateway.get("pid"))
+    alerts: list[dict] = []
+    stuck_jobs: list[dict] = []
+
+    if not gateway_online:
+        alerts.append({"id": "gateway-offline", "level": "error", "title": "Hermes gateway offline", "detail": "Agent activity cannot be verified."})
+
+    for agent in read_agents():
+        if agent["status"] not in {"waiting", "error"}:
+            continue
+        item = {
+            "id": f'agent-{agent["id"]}',
+            "level": "error" if agent["status"] == "error" else "warning",
+            "title": f'{agent["name"]} needs attention',
+            "detail": agent.get("status_reason") or "Task is not progressing",
+            "agent_id": agent["id"],
+            "task_id": agent.get("task_id"),
+        }
+        alerts.append(item)
+        if agent.get("task_id"):
+            stuck_jobs.append(item)
+
+    for job in read_cron():
+        next_run = _timestamp(job.get("next_run"))
+        overdue = job.get("enabled") and next_run is not None and next_run < now - 300
+        failed = str(job.get("last_status") or "").lower() in {"error", "failed"} or bool(job.get("last_error"))
+        if not (overdue or failed):
+            continue
+        item = {
+            "id": f'cron-{job["id"]}',
+            "level": "error" if failed else "warning",
+            "title": f'{job["name"]} {"failed" if failed else "is overdue"}',
+            "detail": job.get("last_error") or "The scheduled run has not started.",
+            "cron_id": job["id"],
+        }
+        alerts.append(item)
+        stuck_jobs.append(item)
+
+    return {
+        "status": "healthy" if not alerts else "degraded",
+        "started_at": _iso(HUB_STARTED_AT),
+        "uptime_seconds": max(0, int(now - HUB_STARTED_AT)),
+        "gateway_online": gateway_online,
+        "alerts": alerts,
+        "stuck_jobs": stuck_jobs,
+    }
+
+
 # ── REST endpoints ────────────────────────────────────────────────────
 
 @app.get("/api/agents")
@@ -499,6 +563,22 @@ async def get_gateway():
     return read_gateway()
 
 
+@app.get("/api/health")
+async def get_health():
+    return read_health()
+
+
+async def _restart_hub() -> None:
+    await asyncio.sleep(0.25)
+    os._exit(0)
+
+
+@app.post("/api/restart")
+async def restart_hub():
+    asyncio.create_task(_restart_hub())
+    return {"status": "restarting"}
+
+
 # ── SSE ───────────────────────────────────────────────────────────────
 
 async def event_generator() -> AsyncGenerator[str, None]:
@@ -508,18 +588,15 @@ async def event_generator() -> AsyncGenerator[str, None]:
         now = datetime.now(timezone.utc).isoformat()
         key = json.dumps(agents, sort_keys=True, default=str)
 
+        payload = {"type": "heartbeat", "timestamp": now, "health": read_health()}
         if key != _last_agents_key:
-            payload = {
-                "type": "heartbeat",
-                "timestamp": now,
+            payload.update({
                 "agents": agents,
                 "sessions_count": len(read_sessions()),
                 "gateway": read_gateway(),
-            }
-            yield json.dumps(payload)
+            })
             _last_agents_key = key
-        else:
-            yield json.dumps({"type": "heartbeat", "timestamp": now})
+        yield json.dumps(payload)
 
         await asyncio.sleep(5)
 

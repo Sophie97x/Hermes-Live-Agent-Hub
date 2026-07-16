@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import ActivityFeed from './components/ActivityFeed';
 import KanbanBoard from './components/KanbanBoard';
 import CronJobs from './components/CronJobs';
@@ -15,6 +15,14 @@ const navItems = [
   ['schedule', 'Schedules', '◷'],
 ];
 
+function formatUptime(seconds = 0) {
+  if (seconds < 60) return '<1m';
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  return `${hours}h ${minutes}m`;
+}
+
 function App() {
   const [agents, setAgents] = useState([]);
   const [activity, setActivity] = useState([]);
@@ -25,6 +33,12 @@ function App() {
   const [lastUpdate, setLastUpdate] = useState(null);
   const [selectedAgent, setSelectedAgent] = useState(null);
   const [agentFilter, setAgentFilter] = useState('all');
+  const [health, setHealth] = useState({ uptime_seconds: 0, alerts: [], stuck_jobs: [] });
+  const [showHealth, setShowHealth] = useState(false);
+  const [restarting, setRestarting] = useState(false);
+  const [toast, setToast] = useState(null);
+  const knownAlerts = useRef(new Set());
+  const alertsReady = useRef(false);
 
   useEffect(() => {
     let mounted = true;
@@ -36,9 +50,10 @@ function App() {
           fetch(`${API}/api/activity`),
           fetch(`${API}/api/kanban`),
           fetch(`${API}/api/cron`),
+          fetch(`${API}/api/health`),
         ]);
         if (!responses.every((response) => response.ok)) throw new Error('API unavailable');
-        const [nextAgents, nextActivity, nextKanban, nextCron] = await Promise.all(
+        const [nextAgents, nextActivity, nextKanban, nextCron, nextHealth] = await Promise.all(
           responses.map((response) => response.json()),
         );
         if (!mounted) return;
@@ -46,6 +61,7 @@ function App() {
         setActivity(nextActivity || []);
         setKanban(nextKanban || {});
         setCron(nextCron || []);
+        setHealth(nextHealth || { uptime_seconds: 0, alerts: [], stuck_jobs: [] });
         setConnected(true);
         setLastUpdate(new Date());
       } catch {
@@ -70,6 +86,7 @@ function App() {
       const data = JSON.parse(event.data);
       if (!mounted || data.type !== 'heartbeat') return;
       if (Array.isArray(data.agents)) setAgents(data.agents);
+      if (data.health) setHealth(data.health);
       setConnected(true);
       setLastUpdate(new Date(data.timestamp || Date.now()));
     };
@@ -81,6 +98,29 @@ function App() {
       eventSource.close();
     };
   }, []);
+
+  useEffect(() => {
+    const nextIds = new Set((health.alerts || []).map((alert) => alert.id));
+    const newAlert = (health.alerts || []).find((alert) => !knownAlerts.current.has(alert.id));
+    if (alertsReady.current && newAlert) {
+      setToast(newAlert);
+      window.setTimeout(() => setToast(null), 6000);
+    }
+    knownAlerts.current = nextIds;
+    alertsReady.current = true;
+  }, [health.alerts]);
+
+  const restartHub = async () => {
+    setRestarting(true);
+    setShowHealth(false);
+    try {
+      await fetch(`${API}/api/restart`, { method: 'POST' });
+      window.setTimeout(() => window.location.reload(), 1800);
+    } catch {
+      setRestarting(false);
+      setToast({ title: 'Restart failed', detail: 'The hub could not be restarted.' });
+    }
+  };
 
   const activeCount = agents.filter((agent) => agent.status === 'working').length;
   const attentionCount = agents.filter((agent) => ['waiting', 'error'].includes(agent.status)).length;
@@ -120,9 +160,22 @@ function App() {
             </button>
           ))}
         </nav>
-        <div className="sidebar-footer">
-          <span className={connected ? 'connection-dot online' : 'connection-dot'} />
-          <small>{connected ? `Hub connected · ${activeCount} active` : 'Hub offline'}</small>
+        <div className="sidebar-footer-wrap">
+          <button className="sidebar-footer" onClick={() => setShowHealth((value) => !value)} aria-expanded={showHealth}>
+            <span className={connected ? 'connection-dot online' : 'connection-dot'} />
+            <small>{connected ? `Online · ${formatUptime(health.uptime_seconds)}` : restarting ? 'Restarting…' : 'Hub offline'}</small>
+            {!!health.alerts?.length && <em>{health.alerts.length}</em>}
+          </button>
+          {showHealth && (
+            <aside className="health-popover">
+              <header><div><strong>System health</strong><small>{health.status === 'healthy' ? 'Everything looks good' : `${health.alerts.length} item${health.alerts.length === 1 ? '' : 's'} need attention`}</small></div><button onClick={() => setShowHealth(false)} aria-label="Close system health">×</button></header>
+              <div className="health-metrics"><span><small>Hub uptime</small><strong>{formatUptime(health.uptime_seconds)}</strong></span><span><small>Stuck jobs</small><strong>{health.stuck_jobs?.length || 0}</strong></span></div>
+              <div className="health-alerts">
+                {health.alerts?.length ? health.alerts.map((alert) => <div className={`health-alert ${alert.level}`} key={alert.id}><span>!</span><p><strong>{alert.title}</strong><small>{alert.detail.replaceAll('_', ' ')}</small></p></div>) : <p className="health-clear">✓ No failures or stuck jobs</p>}
+              </div>
+              <button className="restart-button" onClick={restartHub} disabled={restarting}>{restarting ? 'Restarting…' : '↻ Restart hub'}</button>
+            </aside>
+          )}
         </div>
       </aside>
 
@@ -191,6 +244,7 @@ function App() {
           </aside>
         </button>
       )}
+      {toast && <button className="failure-toast" onClick={() => { setToast(null); setShowHealth(true); }}><span>!</span><p><strong>{toast.title}</strong><small>{toast.detail}</small></p></button>}
     </div>
   );
 }
