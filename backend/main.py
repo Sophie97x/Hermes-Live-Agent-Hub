@@ -55,6 +55,41 @@ def _query(db_path: Path, sql: str, params: tuple = ()) -> list[dict]:
         return []
 
 
+def _kanban_db_paths() -> list[Path]:
+    """Return the legacy board plus every current project-scoped board."""
+    paths = [KANBAN_DB]
+    boards_dir = KANBAN_DB.parent / "kanban" / "boards"
+    if boards_dir.exists():
+        paths.extend(sorted(boards_dir.glob("*/kanban.db")))
+    return [path for path in paths if path.is_file() and path.stat().st_size > 0]
+
+
+def _query_kanban(sql: str, params: tuple = ()) -> list[dict]:
+    """Run a read across all Hermes boards and retain its board identity."""
+    rows: list[dict] = []
+    for db_path in _kanban_db_paths():
+        board_id = db_path.parent.name if db_path != KANBAN_DB else "legacy"
+        for row in _query(db_path, sql, params):
+            row["_board_id"] = board_id
+            rows.append(row)
+    return rows
+
+
+def _dedupe_tasks(rows: list[dict]) -> list[dict]:
+    """Prefer the newest copy if a task exists in more than one board."""
+    selected: dict[str, dict] = {}
+    for row in rows:
+        task_id = str(row.get("id") or "")
+        current = selected.get(task_id)
+        freshness = row.get("completed_at") or row.get("started_at") or row.get("created_at") or 0
+        current_freshness = 0 if current is None else (
+            current.get("completed_at") or current.get("started_at") or current.get("created_at") or 0
+        )
+        if current is None or freshness >= current_freshness:
+            selected[task_id] = row
+    return list(selected.values())
+
+
 def _read_json(path: Path) -> dict:
     try:
         return json.loads(path.read_text()) if path.exists() else {}
@@ -94,6 +129,8 @@ _KANBAN_COLUMN = {
     "ready": "backlog",
     "queued": "backlog",
     "active": "in_progress",
+    "running": "in_progress",
+    "in_progress": "in_progress",
     "blocked": "in_progress",
     "in_review": "review",
     "review": "review",
@@ -189,7 +226,7 @@ def discover_team() -> list[dict]:
 
 def read_agents() -> list[dict]:
     """Return Friday plus every real Hermes profile, never raw transport sessions."""
-    task_rows = _query(KANBAN_DB, """
+    task_rows = _query_kanban("""
         SELECT t.id, t.assignee, t.title, t.status, t.created_at,
                t.started_at, t.worker_pid, t.last_heartbeat_at,
                t.current_run_id, t.last_failure_error,
@@ -211,6 +248,11 @@ def read_agents() -> list[dict]:
                         WHEN 'blocked' THEN 1 ELSE 2 END,
           t.created_at DESC
     """)
+    task_rows.sort(key=lambda row: (
+        0 if str(row.get("status") or "").lower() in {"active", "running"} else
+        1 if str(row.get("status") or "").lower() == "blocked" else 2,
+        -(row.get("created_at") or 0),
+    ))
     latest_task: dict[str, dict] = {}
     for row in task_rows:
         latest_task.setdefault(str(row["assignee"]).lower(), row)
@@ -400,7 +442,7 @@ def read_cron() -> list[dict]:
 
 
 def read_kanban() -> dict:
-    rows = _query(KANBAN_DB, """
+    rows = _dedupe_tasks(_query_kanban("""
         SELECT id, title, body, assignee, status, priority, created_at,
                started_at, completed_at, workspace_path, project_id, result,
                last_failure_error,
@@ -408,7 +450,8 @@ def read_kanban() -> dict:
                 WHERE e.task_id = tasks.id AND e.kind = 'archived') AS archived_at
         FROM tasks
         ORDER BY COALESCE(completed_at, archived_at, created_at) DESC
-    """)
+    """))
+    rows.sort(key=lambda row: row.get("completed_at") or row.get("archived_at") or row.get("created_at") or 0, reverse=True)
     board: dict[str, list] = {
         "backlog": [], "in_progress": [], "review": [], "completed": [], "archive": [],
     }
@@ -423,7 +466,7 @@ def read_kanban() -> dict:
             "priority": str(r["priority"] or "0"),
             "status": r["status"],
             "detail": r["body"] or "",
-            "project": r["project_id"] or "",
+            "project": r["project_id"] or ("" if r["_board_id"] == "legacy" else r["_board_id"]),
             "workspace": r["workspace_path"] or "",
             "result": r["result"] or "",
             "failure": r["last_failure_error"] or "",
@@ -461,13 +504,14 @@ def read_projects() -> list[dict]:
 
 def read_project_rooms() -> list[dict]:
     """Group real Hermes tasks into durable project/session rooms."""
-    tasks = _query(KANBAN_DB, """
+    tasks = _dedupe_tasks(_query_kanban("""
         SELECT id, title, assignee, status, project_id, session_id,
                workspace_path, created_at, started_at, completed_at,
                result, last_failure_error
         FROM tasks ORDER BY created_at DESC
-    """)
-    links = _query(KANBAN_DB, """
+    """))
+    tasks.sort(key=lambda row: row.get("created_at") or 0, reverse=True)
+    links = _query_kanban("""
         SELECT l.child_id, p.id AS parent_id, p.title AS parent_title,
                p.project_id AS parent_project_id
         FROM task_links l JOIN tasks p ON p.id = l.parent_id
@@ -505,7 +549,11 @@ def read_project_rooms() -> list[dict]:
     rooms: dict[str, dict] = {}
     for task in tasks:
         parent = parent_for.get(task["id"], {})
-        project_id = task.get("project_id") or project_for_component.get(root(task["id"])) or parent.get("parent_project_id")
+        project_id = (
+            task.get("project_id") or project_for_component.get(root(task["id"]))
+            or parent.get("parent_project_id")
+            or (None if task.get("_board_id") == "legacy" else task.get("_board_id"))
+        )
         if project_id:
             key = f"project:{project_id}"
             name = project_names.get(project_id) or parent.get("parent_title") or task["title"]
@@ -556,13 +604,15 @@ def read_project_rooms() -> list[dict]:
 
 
 def read_task_timeline(limit: int = 120) -> list[dict]:
-    rows = _query(KANBAN_DB, """
+    rows = _query_kanban("""
         SELECT e.id, e.task_id, e.run_id, e.kind, e.payload, e.created_at,
                t.title, t.assignee, t.project_id, t.session_id
         FROM task_events e JOIN tasks t ON t.id = e.task_id
         WHERE e.kind != 'heartbeat'
         ORDER BY e.created_at DESC, e.id DESC LIMIT ?
     """, (max(1, min(limit, 300)),))
+    rows.sort(key=lambda row: (row.get("created_at") or 0, row.get("id") or 0), reverse=True)
+    rows = rows[:max(1, min(limit, 300))]
     items: list[dict] = []
     for row in rows:
         try:
@@ -574,7 +624,7 @@ def read_task_timeline(limit: int = 120) -> list[dict]:
             or payload.get("outcome") or payload.get("filename") or row["kind"].replace("_", " ")
         )
         items.append({
-            "id": f'event-{row["id"]}', "task_id": row["task_id"], "run_id": row.get("run_id"),
+            "id": f'event-{row["_board_id"]}-{row["id"]}', "task_id": row["task_id"], "run_id": row.get("run_id"),
             "kind": row["kind"], "timestamp": _iso(row["created_at"]),
             "task_title": row["title"], "agent": (row.get("assignee") or "Hermes").title(),
             "project_id": row.get("project_id") or "", "session_id": row.get("session_id") or "",
@@ -585,7 +635,7 @@ def read_task_timeline(limit: int = 120) -> list[dict]:
 
 def read_agent_conversations() -> dict[str, list[dict]]:
     """Return concise recent messages tied to real agent worker sessions."""
-    task_rows = _query(KANBAN_DB, """
+    task_rows = _query_kanban("""
         SELECT t.assignee, t.session_id, r.metadata
         FROM tasks t LEFT JOIN task_runs r ON r.task_id = t.id
         WHERE t.assignee IS NOT NULL

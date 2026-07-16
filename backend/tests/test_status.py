@@ -145,6 +145,38 @@ class LiveAgentStatusTests(unittest.TestCase):
         (folder / "profile.yaml").write_text("description: research and investigation\n")
         self.assertIn("Nova", self.agents_by_name())
 
+    def test_project_scoped_board_is_discovered(self):
+        now = int(time.time())
+        board = self.kanban_db.parent / "kanban" / "boards" / "new-project" / "kanban.db"
+        board.parent.mkdir(parents=True)
+        with sqlite3.connect(board) as connection:
+            connection.executescript("""
+                CREATE TABLE tasks (
+                    id TEXT PRIMARY KEY, assignee TEXT, title TEXT, status TEXT,
+                    created_at INTEGER, started_at INTEGER, worker_pid INTEGER,
+                    last_heartbeat_at INTEGER, current_run_id INTEGER,
+                    last_failure_error TEXT
+                );
+                CREATE TABLE task_runs (
+                    id INTEGER PRIMARY KEY, task_id TEXT, status TEXT,
+                    worker_pid INTEGER, last_heartbeat_at INTEGER,
+                    started_at INTEGER, ended_at INTEGER, outcome TEXT, error TEXT
+                );
+            """)
+            connection.execute(
+                "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("scoped", "quinn", "Scoped live task", "running", now, now - 10,
+                 os.getpid(), now, 1, None),
+            )
+            connection.execute(
+                "INSERT INTO task_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (1, "scoped", "running", os.getpid(), now, now - 10, None, None, None),
+            )
+
+        quinn = self.agents_by_name()["Quinn"]
+        self.assertEqual((quinn["status"], quinn["task_id"]), ("working", "scoped"))
+        self.assertEqual(main._KANBAN_COLUMN["running"], "in_progress")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -68,7 +68,7 @@ Hermes local state (~/.hermes)
                   React office UI
 ```
 
-The backend reads local SQLite and JSON files without modifying them. Agent profiles are scanned from the Hermes profiles directory, so adding or removing an agent does not require editing the frontend.
+The backend reads local SQLite and JSON files without modifying them. It automatically merges the legacy Kanban database with every project-scoped board under `~/.hermes/kanban/boards/`, so newly created project work appears without restarting or reconfiguring the hub. Agent profiles are scanned from the Hermes profiles directory, so adding or removing an agent does not require editing the frontend.
 
 Project Rooms are derived from real project IDs, linked task graphs and originating Hermes sessions. The timeline excludes noisy heartbeat events, while office replay uses those same verified task events rather than fabricated animation data. Conversation history only shows locally stored messages already linked to an agent's task or worker session.
 
