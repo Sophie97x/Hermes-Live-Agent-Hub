@@ -1,17 +1,30 @@
 import React from 'react';
 import './CronJobs.css';
 
-function CronJobs({ jobs }) {
+function formatDate(value) {
+  if (!value) return 'Not yet';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 'Unknown' : date.toLocaleString();
+}
+
+function CronJobs({ jobs = [] }) {
+  if (!jobs.length) {
+    return <div className="cron-empty"><span>◷</span><strong>No schedules found</strong><p>New Hermes schedules will appear here automatically.</p></div>;
+  }
+
   return (
     <div className="cron-jobs">
       {jobs.map(job => (
-        <div key={job.id} className="cron-job-item">
-          <strong>{job.name}</strong>
-          <p>Schedule: {job.schedule}</p>
-          <p className={`cron-status-${job.status}`}>{job.status}</p>
-          {job.last_run && <p>Last Run: {new Date(job.last_run).toLocaleString()}</p>}
-          {job.next_run && <p>Next Run: {new Date(job.next_run).toLocaleString()}</p>}
-        </div>
+        <article key={job.id} className="cron-job-item">
+          <header><strong>{job.name}</strong><span className={`cron-status cron-status-${job.status}`}>{job.status}</span></header>
+          <p className="cron-schedule">{typeof job.schedule === 'string' ? job.schedule : job.schedule?.display || 'Not scheduled'}</p>
+          <dl>
+            <div><dt>Next run</dt><dd>{formatDate(job.next_run)}</dd></div>
+            <div><dt>Last run</dt><dd>{formatDate(job.last_run)}</dd></div>
+            <div><dt>Completed</dt><dd>{job.runs_completed || 0} runs</dd></div>
+          </dl>
+          {job.last_error && <p className="cron-error">{job.last_error}</p>}
+        </article>
       ))}
     </div>
   );
