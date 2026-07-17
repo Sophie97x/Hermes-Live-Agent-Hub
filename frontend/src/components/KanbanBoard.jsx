@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import './KanbanBoard.css';
 
 const COLLAPSED_STORAGE_KEY = 'hermes-kanban-collapsed-columns';
+const DUE_DATES_STORAGE_KEY = 'hermes-kanban-due-dates';
 
 const columns = [
   ['backlog', 'Backlog', '○'],
@@ -10,6 +11,14 @@ const columns = [
   ['completed', 'Completed', '✓'],
   ['archive', 'Archive', '□'],
 ];
+
+function readDueDates() {
+  try {
+    return JSON.parse(window.localStorage.getItem(DUE_DATES_STORAGE_KEY)) || {};
+  } catch {
+    return {};
+  }
+}
 
 function KanbanBoard({ board = {} }) {
   const [collapsed, setCollapsed] = useState(() => {
@@ -20,20 +29,47 @@ function KanbanBoard({ board = {} }) {
       return { completed: false, archive: false };
     }
   });
+  const [assigneeFilter, setAssigneeFilter] = useState('all');
+  const [dueDates, setDueDates] = useState(readDueDates);
 
   useEffect(() => {
     window.localStorage.setItem(COLLAPSED_STORAGE_KEY, JSON.stringify(collapsed));
   }, [collapsed]);
+
+  const setDueDate = (taskId, value) => {
+    setDueDates((current) => {
+      const next = { ...current };
+      if (value) next[taskId] = value;
+      else delete next[taskId];
+      window.localStorage.setItem(DUE_DATES_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const assignees = useMemo(() => {
+    const names = new Set();
+    Object.values(board).flat().forEach((task) => { if (task.assignee) names.add(task.assignee); });
+    return [...names].sort();
+  }, [board]);
 
   const toggleColumn = (column) => setCollapsed((current) => ({ ...current, [column]: !current[column] }));
   const columnLayout = columns.map(([column]) => collapsed[column] ? '58px' : 'minmax(210px, 1fr)').join(' ');
 
   return (
     <div className="work-history">
+      {!!assignees.length && (
+        <div className="kanban-filters" aria-label="Filter by assignee">
+          <button className={assigneeFilter === 'all' ? 'active' : ''} onClick={() => setAssigneeFilter('all')}>All assignees</button>
+          {assignees.map((name) => <button key={name} className={assigneeFilter === name ? 'active' : ''} onClick={() => setAssigneeFilter(name)}>{titleCase(name)}</button>)}
+        </div>
+      )}
       <section className="workflow-section">
         <div className="kanban-board" style={{ gridTemplateColumns: columnLayout }}>
           {columns.map(([column, label, icon]) => {
-            const tasks = board[column] || [];
+            const tasks = (board[column] || [])
+              .filter((task) => assigneeFilter === 'all' || task.assignee === assigneeFilter)
+              .slice()
+              .sort((left, right) => Number(right.priority || 0) - Number(left.priority || 0));
             const canCollapse = column === 'completed' || column === 'archive';
             const isCollapsed = Boolean(collapsed[column]);
             return (
@@ -43,7 +79,7 @@ function KanbanBoard({ board = {} }) {
                   {canCollapse && <button className="column-collapse" onClick={() => toggleColumn(column)} aria-expanded={!isCollapsed} aria-label={`${isCollapsed ? 'Expand' : 'Minimize'} ${label} column`} title={`${isCollapsed ? 'Expand' : 'Minimize'} ${label}`}>{isCollapsed ? '›' : '‹'}</button>}
                 </div>
                 <div className="kanban-tasks">
-                  {tasks.map((task) => <TaskCard key={task.id} task={task} column={column} />)}
+                  {tasks.map((task) => <TaskCard key={task.id} task={task} column={column} dueDate={dueDates[task.id] || ''} onDueDateChange={(value) => setDueDate(task.id, value)} />)}
                   {!tasks.length && <div className="board-empty">{emptyMessage(column)}</div>}
                 </div>
               </div>
@@ -55,13 +91,16 @@ function KanbanBoard({ board = {} }) {
   );
 }
 
-function TaskCard({ task, column }) {
+function TaskCard({ task, column, dueDate, onDueDateChange }) {
+  const priority = Number(task.priority || 0);
   return (
     <details className="kanban-task">
       <summary>
         <span className={`task-state state-${column}`} />
         <strong>{task.title}</strong>
         <small>{task.assignee ? titleCase(task.assignee) : 'Unassigned'} · {formatDate(task.finished_at || task.created_at)}</small>
+        {!!priority && <span className="priority-badge" title="Hermes task priority">P{priority}</span>}
+        {dueDate && <span className="due-badge" title={`Local reminder: ${dueDate}`}>◷ {formatDate(dueDate)}</span>}
         {['in_progress', 'review'].includes(column) && <TaskStage task={task} />}
       </summary>
       <div className="task-detail">
@@ -71,9 +110,14 @@ function TaskCard({ task, column }) {
         <dl>
           <div><dt>Status</dt><dd>{titleCase(task.status)}</dd></div>
           {task.project && <div><dt>Project</dt><dd>{task.project}</dd></div>}
+          {!!priority && <div><dt>Priority</dt><dd>{priority}</dd></div>}
           <div><dt>Created</dt><dd>{formatDate(task.created_at)}</dd></div>
           {task.finished_at && <div><dt>{column === 'completed' ? 'Completed' : 'Archived'}</dt><dd>{formatDate(task.finished_at)}</dd></div>}
         </dl>
+        <label className="due-date-field" onClick={(event) => event.stopPropagation()}>
+          <span>Local reminder <em>(saved in this browser only, not part of Hermes)</em></span>
+          <input type="date" className="due-date-input" value={dueDate} onChange={(event) => onDueDateChange(event.target.value)} onClick={(event) => event.stopPropagation()} />
+        </label>
       </div>
     </details>
   );
@@ -81,8 +125,11 @@ function TaskCard({ task, column }) {
 
 function TaskStage({ task }) {
   if (!task.progress_label) return null;
-  const indeterminate = task.progress_value == null;
-  return <span className={`kanban-progress ${task.progress_mode || ''}`}>
+  const mode = String(task.progress_mode || '');
+  // Running tasks show the bouncing activity bar, not a static stage percent.
+  const active = mode === 'active' || mode === 'activity';
+  const indeterminate = task.progress_value == null || active;
+  return <span className={`kanban-progress ${active ? 'activity' : mode}`}>
     <span><b>{task.progress_label}</b>{!indeterminate && <em>{task.progress_value}% workflow</em>}</span>
     <i><i style={!indeterminate ? { width: `${task.progress_value}%` } : undefined} /></i>
   </span>;

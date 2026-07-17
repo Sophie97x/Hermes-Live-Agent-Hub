@@ -130,3 +130,15 @@
     grid-template-columns: 1fr;
   }
 }
+
+:root[data-theme="light"] .cron-jobs{border-color:#e2dfec;background:#fff}
+:root[data-theme="light"] .cron-job-item{background:#f8f7fc;border-color:#e6e3ef}
+:root[data-theme="light"] .cron-job-item strong{color:#4633b0}
+:root[data-theme="light"] .cron-schedule{color:#3c3552!important}
+:root[data-theme="light"] .cron-job-item dl div{background:#fff}
+:root[data-theme="light"] .cron-job-item dt{color:#8b84a2}
+:root[data-theme="light"] .cron-job-item dd{color:#3c3552}
+:root[data-theme="light"] .cron-status{background:#f1eefb;color:#5c5768}
+:root[data-theme="light"] .cron-job-item p{color:#726d87}
+:root[data-theme="light"] .cron-empty{color:#726d87}
+:root[data-theme="light"] .cron-empty strong{color:#221f2e}

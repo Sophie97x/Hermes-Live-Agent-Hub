@@ -5,11 +5,25 @@ const importantKinds = new Set(['created', 'claimed', 'started', 'completed', 'b
 
 function TaskTimeline({ events = [] }) {
   const [filter, setFilter] = useState('important');
-  const visible = useMemo(() => events.filter((event) => filter === 'all' || importantKinds.has(event.kind)), [events, filter]);
+  const [agentFilter, setAgentFilter] = useState('all');
+  const [kindFilter, setKindFilter] = useState('all');
+  const agents = useMemo(() => [...new Set(events.map((event) => event.agent).filter(Boolean))].sort(), [events]);
+  const kinds = useMemo(() => [...new Set(events.map((event) => event.kind).filter(Boolean))].sort(), [events]);
+  const visible = useMemo(() => events.filter((event) => (
+    (filter === 'all' || importantKinds.has(event.kind))
+    && (agentFilter === 'all' || event.agent === agentFilter)
+    && (kindFilter === 'all' || event.kind === kindFilter)
+  )), [events, filter, agentFilter, kindFilter]);
 
   return (
     <div className="task-timeline-wrap">
       <div className="timeline-controls"><button className={filter === 'important' ? 'active' : ''} onClick={() => setFilter('important')}>Key events</button><button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>All events</button><span>Live · newest first</span></div>
+      {(!!agents.length || !!kinds.length) && (
+        <div className="timeline-chip-rows">
+          {!!agents.length && <div className="timeline-chips"><button className={agentFilter === 'all' ? 'active' : ''} onClick={() => setAgentFilter('all')}>All agents</button>{agents.map((agent) => <button key={agent} className={agentFilter === agent ? 'active' : ''} onClick={() => setAgentFilter(agent)}>{agent}</button>)}</div>}
+          {!!kinds.length && <div className="timeline-chips"><button className={kindFilter === 'all' ? 'active' : ''} onClick={() => setKindFilter('all')}>All kinds</button>{kinds.map((kind) => <button key={kind} className={kindFilter === kind ? 'active' : ''} onClick={() => setKindFilter(kind)}>{titleCase(kind)}</button>)}</div>}
+        </div>
+      )}
       <div className="task-timeline">
         {visible.map((event) => (
           <article key={event.id} className={`timeline-event kind-${event.kind}`}>

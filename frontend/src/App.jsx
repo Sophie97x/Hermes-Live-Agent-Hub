@@ -18,6 +18,34 @@ const navItems = [
   ['tasks', 'Task board', '▦'],
   ['schedule', 'Schedules', '◷'],
 ];
+const viewIds = new Set(navItems.map(([id]) => id));
+
+function viewFromLocation() {
+  const requested = new URLSearchParams(window.location.search).get('view');
+  return viewIds.has(requested) ? requested : 'office';
+}
+
+function downloadFile(filename, content, mime) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function toCsv(rows, columns) {
+  const escape = (value) => {
+    const text = value == null ? '' : String(value);
+    return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+  };
+  const header = columns.map(([, label]) => escape(label)).join(',');
+  const lines = rows.map((row) => columns.map(([key]) => escape(row[key])).join(','));
+  return [header, ...lines].join('\n');
+}
 
 function formatUptime(seconds = 0) {
   if (seconds < 60) return '<1m';
@@ -34,7 +62,7 @@ function App() {
   const [projectRooms, setProjectRooms] = useState([]);
   const [timeline, setTimeline] = useState([]);
   const [conversations, setConversations] = useState({});
-  const [view, setView] = useState('office');
+  const [view, setView] = useState(viewFromLocation);
   const [connected, setConnected] = useState(false);
   const [lastUpdate, setLastUpdate] = useState(null);
   const [selectedAgent, setSelectedAgent] = useState(null);
@@ -46,10 +74,13 @@ function App() {
   const [toast, setToast] = useState(null);
   const [commandOpen, setCommandOpen] = useState(false);
   const [desktopAlerts, setDesktopAlerts] = useState(() => window.localStorage.getItem('hermes-desktop-alerts') === 'on');
+  const [uiTheme, setUiTheme] = useState(() => window.localStorage.getItem('hermes-ui-theme') === 'light' ? 'light' : 'dark');
   const knownAlerts = useRef(new Set());
   const alertsReady = useRef(false);
   const knownTimeline = useRef(new Set());
   const timelineReady = useRef(false);
+  const wasConnected = useRef(false);
+  const connectionReady = useRef(false);
 
   useEffect(() => {
     let mounted = true;
@@ -147,6 +178,34 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('view') !== view) {
+      params.set('view', view);
+      window.history.replaceState(null, '', `${window.location.pathname}?${params}`);
+    }
+  }, [view]);
+
+  useEffect(() => {
+    const handlePopState = () => setView(viewFromLocation());
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', uiTheme);
+    window.localStorage.setItem('hermes-ui-theme', uiTheme);
+  }, [uiTheme]);
+
+  useEffect(() => {
+    if (connectionReady.current && !wasConnected.current && connected) {
+      setToast({ title: 'Reconnected', detail: 'Live updates from the hub have resumed.' });
+      window.setTimeout(() => setToast(null), 4000);
+    }
+    wasConnected.current = connected;
+    connectionReady.current = true;
+  }, [connected]);
+
+  useEffect(() => {
     const nextIds = new Set((health.alerts || []).map((alert) => alert.id));
     const newAlert = (health.alerts || []).find((alert) => !knownAlerts.current.has(alert.id));
     if (alertsReady.current && newAlert) {
@@ -205,6 +264,18 @@ function App() {
     [kanban],
   );
   const allTasks = useMemo(() => Object.values(kanban).flat(), [kanban]);
+  const workload = useMemo(() => {
+    const byAgent = {};
+    const bump = (name, key) => {
+      if (!name) return;
+      const label = name.charAt(0).toUpperCase() + name.slice(1);
+      byAgent[label] = byAgent[label] || { name: label, completed: 0, active: 0 };
+      byAgent[label][key] += 1;
+    };
+    (kanban.completed || []).forEach((task) => bump(task.assignee, 'completed'));
+    (kanban.in_progress || []).forEach((task) => bump(task.assignee, 'active'));
+    return Object.values(byAgent).sort((a, b) => (b.completed + b.active) - (a.completed + a.active));
+  }, [kanban]);
   const filteredAgents = agents.filter((agent) => (
     agentFilter === 'all'
     || (agentFilter === 'attention' && ['waiting', 'error'].includes(agent.status))
@@ -221,6 +292,21 @@ function App() {
     if (command.type === 'agent') setSelectedAgent(command.value);
     if (command.type === 'project') { setSelectedProject(command.value); setView('projects'); }
     if (command.type === 'task') setView('tasks');
+  };
+
+  const exportTasks = (format) => {
+    if (format === 'json') { downloadFile('hermes-tasks.json', JSON.stringify(allTasks, null, 2), 'application/json'); return; }
+    downloadFile('hermes-tasks.csv', toCsv(allTasks, [
+      ['id', 'ID'], ['title', 'Title'], ['assignee', 'Assignee'], ['status', 'Status'], ['priority', 'Priority'],
+      ['project', 'Project'], ['created_at', 'Created'], ['finished_at', 'Finished'],
+    ]), 'text/csv');
+  };
+
+  const exportTimeline = (format) => {
+    if (format === 'json') { downloadFile('hermes-timeline.json', JSON.stringify(timeline, null, 2), 'application/json'); return; }
+    downloadFile('hermes-timeline.csv', toCsv(timeline, [
+      ['timestamp', 'Timestamp'], ['agent', 'Agent'], ['kind', 'Kind'], ['task_title', 'Task'], ['detail', 'Detail'],
+    ]), 'text/csv');
   };
 
   return (
@@ -241,6 +327,7 @@ function App() {
           ))}
         </nav>
         <button className="command-trigger" onClick={() => setCommandOpen(true)} aria-label="Open command palette">⌘ K</button>
+        <button className="theme-trigger" onClick={() => setUiTheme((value) => value === 'dark' ? 'light' : 'dark')} aria-label={uiTheme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'} title={uiTheme === 'dark' ? 'Light theme' : 'Dark theme'}>{uiTheme === 'dark' ? '☀' : '☾'}</button>
         <div className="sidebar-footer-wrap">
           <button className="sidebar-footer" onClick={() => setShowHealth((value) => !value)} aria-expanded={showHealth}>
             <span className={connected ? 'connection-dot online' : 'connection-dot'} />
@@ -291,6 +378,7 @@ function App() {
 
         {view === 'agents' && (
           <Panel title={agentFilter === 'all' ? 'Agent roster' : agentFilter === 'working' ? 'Agents working' : agentFilter === 'queued' ? 'Queued agents' : agentFilter === 'attention' ? 'Need attention' : agentFilter === 'error' ? 'Agent errors' : agentFilter === 'waiting' ? 'Waiting agents' : 'Agents on break'} subtitle={`${filteredAgents.length} of ${agents.length} team members shown`}>
+            {!!workload.length && <AgentWorkload workload={workload} />}
             <div className="roster-filters" aria-label="Filter agent roster">
               {['all', 'working', 'queued', 'waiting', 'error', 'idle'].map((filter) => <button key={filter} className={agentFilter === filter ? 'active' : ''} onClick={() => setAgentFilter(filter)}>{filter === 'idle' ? 'On break' : filter.charAt(0).toUpperCase() + filter.slice(1)}</button>)}
             </div>
@@ -308,9 +396,9 @@ function App() {
 
         {view === 'projects' && <Panel title="Project rooms" subtitle={`${projectRooms.length} projects grouped from real Hermes tasks and sessions`}><ProjectRooms rooms={projectRooms} selectedId={selectedProject?.id} onSelect={setSelectedProject} /></Panel>}
 
-        {view === 'timeline' && <Panel title="Live task timeline" subtitle="Verified task events from assignment through completion"><TaskTimeline events={timeline} /></Panel>}
+        {view === 'timeline' && <Panel title="Live task timeline" subtitle="Verified task events from assignment through completion" actions={<ExportButtons onExport={exportTimeline} disabled={!timeline.length} />}><TaskTimeline events={timeline} /></Panel>}
 
-        {view === 'tasks' && <Panel title="Task board" subtitle={`${allTaskCount} task records across the live workflow and archive`}><KanbanBoard board={kanban} /></Panel>}
+        {view === 'tasks' && <Panel title="Task board" subtitle={`${allTaskCount} task records across the live workflow and archive`} actions={<ExportButtons onExport={exportTasks} disabled={!allTasks.length} />}><KanbanBoard board={kanban} /></Panel>}
         {view === 'schedule' && <Panel title="Scheduled work" subtitle="Cron jobs managed by Hermes"><CronJobs jobs={cron} /></Panel>}
       </main>
 
@@ -339,8 +427,38 @@ function App() {
   );
 }
 
-function Panel({ title, subtitle, children }) {
-  return <section className="content-panel"><div className="section-heading"><div><h2>{title}</h2><p className="panel-subtitle">{subtitle}</p></div></div>{children}</section>;
+function Panel({ title, subtitle, actions, children }) {
+  return <section className="content-panel"><div className="section-heading"><div><h2>{title}</h2><p className="panel-subtitle">{subtitle}</p></div>{actions}</div>{children}</section>;
+}
+
+function ExportButtons({ onExport, disabled = false }) {
+  return (
+    <div className="export-buttons">
+      <button disabled={disabled} onClick={() => onExport('csv')}>⇩ CSV</button>
+      <button disabled={disabled} onClick={() => onExport('json')}>⇩ JSON</button>
+    </div>
+  );
+}
+
+function AgentWorkload({ workload }) {
+  const max = Math.max(1, ...workload.map((entry) => entry.completed + entry.active));
+  return (
+    <div className="agent-workload">
+      <header><strong>Workload</strong><small>Completed and active tasks per agent</small></header>
+      <div className="workload-rows">
+        {workload.map((entry) => (
+          <div className="workload-row" key={entry.name}>
+            <span>{entry.name}</span>
+            <i>
+              {!!entry.completed && <b className="done" style={{ width: `${(entry.completed / max) * 100}%` }} />}
+              {!!entry.active && <b className="active" style={{ width: `${(entry.active / max) * 100}%` }} />}
+            </i>
+            <em>{entry.completed} done{entry.active ? ` · ${entry.active} active` : ''}</em>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function EmptyState({ message }) {
@@ -349,9 +467,12 @@ function EmptyState({ message }) {
 
 function TaskProgress({ item, compact = false }) {
   if (!item?.progress_label) return null;
-  const indeterminate = item.progress_value == null;
+  const mode = String(item.progress_mode || '');
+  // Running tasks show the bouncing activity bar, not a static stage percent.
+  const active = mode === 'active' || mode === 'activity';
+  const indeterminate = item.progress_value == null || active;
   return (
-    <span className={`task-progress ${compact ? 'compact' : ''} ${item.progress_mode || ''}`}>
+    <span className={`task-progress ${compact ? 'compact' : ''} ${active ? 'activity' : mode}`}>
       <span className="task-progress-meta"><b>{item.progress_label}</b>{!compact && !indeterminate && <em>{item.progress_value}% workflow</em>}</span>
       <span className="task-progress-track" role="progressbar" aria-label={`${item.progress_label} workflow stage`} aria-valuemin="0" aria-valuemax="100" {...(!indeterminate ? { 'aria-valuenow': item.progress_value } : {})}>
         <i style={!indeterminate ? { width: `${item.progress_value}%` } : undefined} />

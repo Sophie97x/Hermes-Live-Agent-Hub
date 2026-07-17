@@ -8,3 +8,32 @@
 /* Neutral professional task-board surfaces. */
 .kanban-column{border-color:#2b303d;background:#11151c;box-shadow:0 12px 34px #0002}.kanban-column-head{border-bottom-color:#2b303d}.kanban-column-head>span{background:#1d222c}.kanban-column-head em{background:#1d222c;color:#a6abb5}.kanban-task{border-color:#2d323f;background:#181c25}.kanban-task[open]{border-color:#5b537c;background:#1b1f2a}.kanban-task summary:hover{background:#202530}.task-detail{border-top-color:#303542}.task-result,.task-failure{background:#11151c}.column-collapse{border-color:#343947;background:#1d222c}.column-collapse:hover{border-color:#7064c5;background:#2b293e}.board-empty{border-color:#303541;color:#9298a5}
 .kanban-progress{display:grid;gap:4px;margin-top:3px}.kanban-progress>span{display:flex;justify-content:space-between;gap:6px}.kanban-progress b,.kanban-progress em{color:#9690a0;font-size:7px;font-style:normal}.kanban-progress>i{display:block;height:4px;overflow:hidden;border-radius:999px;background:#302b3a}.kanban-progress>i>i{position:relative;display:block;height:100%;min-width:5px;border-radius:inherit;background:linear-gradient(90deg,#7061d2,#55bd9a);transition:width .45s ease}
+
+.kanban-progress.activity>i>i{width:40%;animation:activity-progress 1.7s ease-in-out infinite}
+.kanban-filters{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px}.kanban-filters button{padding:7px 11px;border:1px solid #303643;border-radius:9px;background:#171c25;color:#aeb5c1;font-size:10px;font-weight:600;cursor:pointer}.kanban-filters button:hover{color:#fff}.kanban-filters button.active{border-color:#6c60ba;background:#2b2842;color:#fff}
+.priority-badge{justify-self:start;padding:2px 6px;border:1px solid #4b4767;border-radius:6px;background:#282642;color:#aaa0ed;font-size:7px;font-weight:800}
+.due-badge{justify-self:start;padding:2px 6px;border:1px solid #4b3f2e;border-radius:6px;background:#332a1c;color:#e6b878;font-size:7px;font-weight:700}
+.due-date-field{display:grid;gap:5px;margin-top:10px;padding-top:9px;border-top:1px solid #302b3b}.due-date-field>span{color:#8f889a;font-size:7px;text-transform:uppercase;letter-spacing:.04em}.due-date-field em{color:#635d6c;font-style:normal;text-transform:none;letter-spacing:0}.due-date-input{padding:6px 8px;border:1px solid #363047;border-radius:7px;background:#15121c;color:#d9d4df;font-size:10px}
+
+:root[data-theme="light"] .kanban-column{border-color:#e2dfec;background:#fff;box-shadow:0 6px 18px #00000008}
+:root[data-theme="light"] .kanban-column-head{border-bottom-color:#e6e3ef}
+:root[data-theme="light"] .kanban-column-head>span{background:#f1eefb;color:#6d6685}
+:root[data-theme="light"] .kanban-column-head h4{color:#3c3552}
+:root[data-theme="light"] .kanban-column-head em{background:#f1eefb;color:#726d87}
+:root[data-theme="light"] .column-completed .kanban-column-head>span{background:#dcf5e8;color:#2a9964}
+:root[data-theme="light"] .kanban-task{border-color:#e6e3ef;background:#fdfcff}
+:root[data-theme="light"] .kanban-task[open]{border-color:#b7ace3;background:#f8f6ff}
+:root[data-theme="light"] .kanban-task summary:hover{background:#f5f3fb}
+:root[data-theme="light"] .kanban-task summary strong{color:#221f2e}
+:root[data-theme="light"] .kanban-task summary small{color:#7a748d}
+:root[data-theme="light"] .task-detail{border-top-color:#e6e3ef}
+:root[data-theme="light"] .task-detail>p,:root[data-theme="light"] .task-result p,:root[data-theme="light"] .task-failure p{color:#4c4760}
+:root[data-theme="light"] .task-result,:root[data-theme="light"] .task-failure{background:#f8f7fc}
+:root[data-theme="light"] .task-failure{background:#fdf3ee}
+:root[data-theme="light"] .task-detail dt{color:#8b84a2}
+:root[data-theme="light"] .task-detail dd{color:#4c4760}
+:root[data-theme="light"] .board-empty{border-color:#dcd8ea;color:#8b84a2}
+:root[data-theme="light"] .column-collapse{border-color:#dcd8ea;background:#f8f7fc;color:#5c5768}
+:root[data-theme="light"] .kanban-filters button,:root[data-theme="light"] .priority-badge{border-color:#dcd8ea;background:#f8f7fc;color:#5c5768}
+:root[data-theme="light"] .kanban-filters button.active{border-color:#7662d2;background:#eeeafb;color:#4633b0}
+:root[data-theme="light"] .due-date-input{border-color:#dcd8ea;background:#fff;color:#221f2e}
