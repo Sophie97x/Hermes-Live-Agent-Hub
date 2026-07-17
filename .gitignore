@@ -30,3 +30,4 @@ outputs/
 .idea/
 .vscode/
 *.log
+.worktrees/
