@@ -11,22 +11,38 @@
 
 ## Why I made it
 
-I wanted a quick way to look at Hermes and understand what the whole team was doing without digging through terminals, databases or log files. The hub turns that state into a live office: active agents move to the department that matches their work, idle agents head to the Break Room, and Friday stays in Operations coordinating the team.
+I wanted a quick way to look at Hermes and understand what the whole team was doing without digging through terminals, databases or log files. The hub turns that state into a live office: verified workers move to the department that matches their work, queued agents wait in the Meeting Room, idle agents head to the Break Room, and Friday stays in Operations coordinating the team.
 
 It is deliberately lightweight. The characters and movement use small CSS animations, the backend reads Hermes state directly, and there is no WebGL engine or heavy UI framework running in the background.
 
 ## What it does
 
 - Discovers new Hermes agent profiles automatically
-- Shows working, waiting and idle agents in a live office
+- Shows verified working, queued, waiting, failed and idle states in a live office
+- Shows compact workflow-stage progress bars on agents, speech bubbles and active task cards
 - Routes agents between seven departments based on their current task
+- Shows up to three active projects with real total task progress in the empty central corridor
 - Keeps idle agents together in the Break Room
 - Opens agent profiles and readable speech bubbles on click
 - Shows backlog, active, review, completed and archived work
+- Groups connected tasks and sessions into clickable Project Rooms with progress and team membership
+- Shows a verified live task timeline from assignment and claim through completion or failure
+- Adds recent linked conversation history inside every agent profile
+- Replays real task history in the office so agents move through their past departments
+- Supports opt-in desktop alerts for failures, stuck work, reviews and completions
+- Includes a `⌘K` command palette for agents, projects, tasks and navigation
 - Remembers whether Completed and Archive are minimized
 - Includes Midnight, Daylight and Botanical office themes
 - Supports a clutter-free full-screen office view
+- Shows hub uptime, gateway health, failed work and stuck jobs in one compact panel
+- Provides in-app failure alerts and a one-click self-recovering restart
 - Uses server-sent events for live updates and pauses background polling when the tab is hidden
+
+## What “live” means
+
+The green connection badge means the dashboard is connected to the local Hermes data, not that every assigned agent is running. A specialist only appears as working when Hermes has a running task, a live worker PID and a heartbeat from the last 120 seconds. Assigned cards without a worker are queued; blocked or stale work needs attention. Progress bars show the verified workflow stage (queued, running, paused, review or complete), while a shimmer shows that an active worker is still alive; they do not invent a percentage from elapsed time.
+
+Friday uses real session messages rather than old unclosed session records. She remains active for five minutes after recent session activity, then returns to idle. This keeps the office useful without pretending that an old task or terminal session is still running.
 
 ## Task history
 
@@ -39,7 +55,8 @@ The Task Board gives me one place to see current work and the projects the team 
 ```text
 Hermes local state (~/.hermes)
         │
-        ├── sessions and task databases
+        ├── sessions, messages and task databases
+        ├── task events and project links
         ├── cron jobs
         └── agent profiles
                 │
@@ -53,7 +70,11 @@ Hermes local state (~/.hermes)
                   React office UI
 ```
 
-The backend reads local SQLite and JSON files without modifying them. Agent profiles are scanned from the Hermes profiles directory, so adding or removing an agent does not require editing the frontend.
+The backend reads local SQLite and JSON files without modifying them. It automatically merges the legacy Kanban database with every project-scoped board under `~/.hermes/kanban/boards/`, so newly created project work appears without restarting or reconfiguring the hub. Agent profiles are scanned from the Hermes profiles directory, so adding or removing an agent does not require editing the frontend.
+
+Project Rooms are derived from real project IDs, linked task graphs and originating Hermes sessions. The timeline excludes noisy heartbeat events, while office replay uses those same verified task events rather than fabricated animation data. Conversation history only shows locally stored messages already linked to an agent's task or worker session.
+
+Desktop alerts are off by default. They can be enabled from System Health and are limited to work that completes, enters review, becomes blocked or fails. Press `⌘K` anywhere in the hub to find an agent, project, task or view.
 
 ## Run it locally
 

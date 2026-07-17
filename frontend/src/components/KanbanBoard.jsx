@@ -81,9 +81,10 @@ function TaskCard({ task, column }) {
 
 function TaskStage({ task }) {
   if (!task.progress_label) return null;
+  const indeterminate = task.progress_value == null;
   return <span className={`kanban-progress ${task.progress_mode || ''}`}>
-    <span><b>{task.progress_label}</b><em>{task.progress_value}% workflow</em></span>
-    <i><i style={{ width: `${task.progress_value}%` }} /></i>
+    <span><b>{task.progress_label}</b>{!indeterminate && <em>{task.progress_value}% workflow</em>}</span>
+    <i><i style={!indeterminate ? { width: `${task.progress_value}%` } : undefined} /></i>
   </span>;
 }
 

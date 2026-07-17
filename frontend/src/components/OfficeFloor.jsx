@@ -1,37 +1,54 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import officeBackground from '../assets/hermes-office-expanded-midnight.jpg';
 import daylightBackground from '../assets/hermes-office-expanded-daylight.jpg';
 import botanicalBackground from '../assets/hermes-office-expanded-botanical.jpg';
 import './OfficeFloor.css';
+import { findPath, interpolatePath } from '../utils/pathfinding';
+
+const DESK_FACINGS = {
+  coding: ['right', 'front', 'front', 'right'],
+  research: ['left', 'front', 'front', 'left'],
+  creative: ['left', 'left', 'front', 'front'],
+  operations: ['front', 'front', 'front', 'front'],
+  quality: ['left', 'left', 'front', 'front'],
+};
 
 const ROOMS = {
   coding: {
     label: 'Coding Studio', icon: '⌘', subtitle: 'Building & shipping',
     spots: [[15, 20], [27, 20], [15, 32], [27, 32]],
+    facings: DESK_FACINGS.coding,
   },
   research: {
     label: 'Research Library', icon: '⌕', subtitle: 'Reading & analysis',
     spots: [[43, 20], [55, 20], [43, 32], [55, 32]],
+    facings: DESK_FACINGS.research,
   },
   creative: {
     label: 'Creative Studio', icon: '✦', subtitle: 'Designing & making',
     spots: [[72, 20], [84, 20], [72, 32], [84, 32]],
+    facings: DESK_FACINGS.creative,
   },
   operations: {
     label: 'Operations', icon: '◎', subtitle: 'Monitoring systems',
     spots: [[12, 69], [23, 69], [12, 81], [23, 81]],
+    facings: DESK_FACINGS.operations,
   },
   meeting: {
     label: 'Meeting Room', icon: '◇', subtitle: 'Waiting & collaborating',
-    spots: [[34, 69], [43, 69], [34, 81], [43, 81]],
+    // Ordered around the real round-table chairs, alternating sides to avoid overlap.
+    spots: [[36, 68.5], [41.7, 74], [38.7, 81.5], [33.2, 81.5], [31.6, 74], [38.7, 70.5], [41.7, 78.4], [36, 82.8], [31.6, 78.4], [33.2, 70.5]],
+    facings: ['front', 'left', 'left', 'right', 'right', 'left', 'left', 'front', 'right', 'right'],
   },
   quality: {
     label: 'Quality Lab', icon: '✓', subtitle: 'Testing & reviewing',
     spots: [[57, 69], [67, 69], [57, 81], [67, 81]],
+    facings: DESK_FACINGS.quality,
   },
   breakroom: {
     label: 'Break Room', icon: '☕', subtitle: 'Resting & recharging',
     spots: [[75, 69], [81.5, 69], [88, 69], [94.5, 69], [75, 84], [81.5, 84], [88, 84], [94.5, 84], [84.75, 92]],
+    facings: ['front', 'front', 'front', 'front', 'left', 'front', 'right', 'front', 'front'],
   },
 };
 
@@ -40,6 +57,17 @@ const THEMES = {
   midnight: { label: 'Midnight', image: officeBackground },
   daylight: { label: 'Daylight', image: daylightBackground },
   botanical: { label: 'Botanical', image: botanicalBackground },
+};
+
+const WAYPOINTS = {
+  center: [50, 45.8], // Intersection of horizontal and vertical paths
+  codingEntrance: [20, 45.8],
+  researchEntrance: [65, 45.8],
+  creativeEntrance: [85, 45.8],
+  operationsEntrance: [50, 75],
+  meetingEntrance: [40, 75],
+  qualityEntrance: [60, 75],
+  breakroomEntrance: [90, 75],
 };
 
 const CHARACTER_PALETTES = [
@@ -61,31 +89,35 @@ const HOME_ROOMS = {
 
 function destinationFor(agent) {
   const task = `${agent.current_task || ''} ${agent.name || ''}`.toLowerCase();
-  if (/complete|finished|done|archived|taking a break|recharging/.test(task)) return 'breakroom';
+  if (/taking a break|recharging|break time/.test(task)) return 'breakroom';
   if (agent.status === 'idle') return 'breakroom';
   if (agent.name === 'Friday') return 'operations';
+  if (['queued', 'waiting', 'error'].includes(agent.status)) return 'meeting';
   if (agent.name === 'Atlas') return 'meeting';
   if (agent.name === 'Quinn' || /quality|test|testing|qa|verify|validation/.test(task)) return 'quality';
   if (['Maya', 'Studio'].includes(agent.name) || /design|creative|image|video|visual|ux|ui/.test(task)) return 'creative';
-  if (agent.status === 'waiting' || /waiting|blocked|approval|review|sync|meeting/.test(task)) return 'meeting';
+  if (/waiting|blocked|approval|review|sync|meeting/.test(task)) return 'meeting';
   if (/research|search|analyse|analyze|document|obsidian|read|investigate/.test(task)) return 'research';
   if (/monitor|cron|deploy|backend|server|gateway|schedule|incident|system/.test(task)) return 'operations';
   if (HOME_ROOMS[agent.name]) return HOME_ROOMS[agent.name];
-  if (agent.home && ROOMS[agent.home]) return agent.home;
-  return 'coding';
+  return agent.home === 'meeting' ? 'meeting' : agent.home === 'quality' ? 'quality' : agent.home === 'creative' ? 'creative' : 'coding';
 }
 
-function OfficeFloor({ agents = [], onSelectAgent, selectedAgent }) {
+function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [], projectRooms = [], onSelectProject }) {
   const mapRef = useRef(null);
   const [openBubble, setOpenBubble] = useState(null);
   const [controlsOpen, setControlsOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [movingAgents, setMovingAgents] = useState([]);
+  const [agentPaths, setAgentPaths] = useState({});
   const previousRooms = useRef({});
+  const previousPositions = useRef({});
   const [statusFilter, setStatusFilter] = useState('all');
   const [roomFilter, setRoomFilter] = useState('all');
   const [showBubbles, setShowBubbles] = useState(true);
   const [showLabels, setShowLabels] = useState(true);
+  const [replayActive, setReplayActive] = useState(false);
+  const [replayIndex, setReplayIndex] = useState(0);
   const [theme, setTheme] = useState(() => {
     const savedTheme = window.localStorage.getItem('hermes-office-theme');
     return THEMES[savedTheme] ? savedTheme : 'midnight';
@@ -120,23 +152,88 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent }) {
     const request = map.requestFullscreen || map.webkitRequestFullscreen;
     await request?.call(map);
   };
+  const replayable = useMemo(() => timeline.filter((event) => event.agent && ['claimed', 'started', 'completed', 'blocked', 'failed', 'review'].includes(event.kind)).slice(0, 30).reverse(), [timeline]);
+  const replayEvent = replayActive ? replayable[replayIndex] : null;
+  useEffect(() => {
+    if (!replayActive || !replayable.length) return undefined;
+    const timer = window.setTimeout(() => {
+      if (replayIndex >= replayable.length - 1) {
+        setReplayActive(false);
+        setReplayIndex(0);
+      } else {
+        setReplayIndex((index) => index + 1);
+      }
+    }, 1800);
+    return () => window.clearTimeout(timer);
+  }, [replayActive, replayIndex, replayable.length]);
+
+  const roomEntrance = (room) => {
+    switch (room) {
+      case 'coding': return WAYPOINTS.codingEntrance;
+      case 'research': return WAYPOINTS.researchEntrance;
+      case 'creative': return WAYPOINTS.creativeEntrance;
+      case 'operations': return WAYPOINTS.operationsEntrance;
+      case 'meeting': return WAYPOINTS.meetingEntrance;
+      case 'quality': return WAYPOINTS.qualityEntrance;
+      case 'breakroom': return WAYPOINTS.breakroomEntrance;
+      default: return WAYPOINTS.center;
+    }
+  };
+  const displayAgents = agents.map((agent) => agent.name.toLowerCase() === replayEvent?.agent.toLowerCase() ? {
+    ...agent,
+    status: ['blocked', 'failed'].includes(replayEvent.kind) ? 'waiting' : 'working',
+    current_task: replayEvent.task_title,
+  } : agent);
   const roomUse = Object.fromEntries(roomOrder.map((room) => [room, 0]));
-  const placedAgents = agents.slice(0, 24).map((agent) => {
+  const orderedAgents = [...displayAgents].slice(0, 24).sort((left, right) => {
+    const roomDifference = roomOrder.indexOf(destinationFor(left)) - roomOrder.indexOf(destinationFor(right));
+    return roomDifference || left.id.localeCompare(right.id);
+  });
+  const placedAgents = orderedAgents.map((agent) => {
     const room = destinationFor(agent);
     const slot = roomUse[room]++;
     const spots = ROOMS[room].spots;
-    const [left, top] = spots[slot % spots.length];
+    const [targetLeft, targetTop] = spots[slot % spots.length];
     const overflow = Math.floor(slot / spots.length);
-    return { ...agent, room, left: left + overflow * 1.6, top: top + overflow * 1.5 };
+    const left = targetLeft + overflow * 1.6;
+    const top = targetTop + overflow * 1.5;
+    const previous = previousPositions.current[agent.id];
+    // Never call setState while mapping — that blanked the whole page.
+    const currentPosition = Array.isArray(previous) ? previous : [left, top];
+    return {
+      ...agent,
+      room,
+      left,
+      top,
+      seatFacing: ROOMS[room].facings?.[slot % spots.length],
+      currentPosition,
+      destination: [left, top],
+    };
   });
 
   useEffect(() => {
     const nextRooms = Object.fromEntries(placedAgents.map((agent) => [agent.id, agent.room]));
+    const nextPositions = Object.fromEntries(placedAgents.map((agent) => [agent.id, agent.destination]));
+    const prevRooms = previousRooms.current;
     const moved = placedAgents
-      .filter((agent) => previousRooms.current[agent.id] && previousRooms.current[agent.id] !== agent.room)
+      .filter((agent) => prevRooms[agent.id] && prevRooms[agent.id] !== agent.room)
       .map((agent) => agent.id);
+
     previousRooms.current = nextRooms;
+    previousPositions.current = nextPositions;
+
     if (!moved.length) return undefined;
+
+    // Pathfinding stays pure / outside render.
+    setAgentPaths((prev) => {
+      const next = { ...prev };
+      for (const agent of placedAgents) {
+        if (!moved.includes(agent.id)) continue;
+        const start = roomEntrance(prevRooms[agent.id] || agent.room);
+        next[agent.id] = findPath(start, agent.destination, []);
+      }
+      return next;
+    });
     setMovingAgents((current) => [...new Set([...current, ...moved])]);
     const timer = window.setTimeout(() => {
       setMovingAgents((current) => current.filter((id) => !moved.includes(id)));
@@ -153,6 +250,12 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent }) {
     const matchesRoom = roomFilter === 'all' || agent.room === roomFilter;
     return matchesStatus && matchesRoom;
   });
+  const meetingTaskIds = new Set(placedAgents.filter((agent) => agent.room === 'meeting' && agent.task_id).map((agent) => agent.task_id));
+  const featuredProjects = projectRooms
+    .map((room) => ({ ...room, meetingMatches: room.tasks?.filter((task) => meetingTaskIds.has(task.id)).length || 0 }))
+    .filter((room) => room.status === 'active')
+    .sort((left, right) => right.meetingMatches - left.meetingMatches || String(right.updated_at || '').localeCompare(String(left.updated_at || '')))
+    .slice(0, 3);
 
   const resetView = () => {
     setStatusFilter('all');
@@ -166,14 +269,15 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent }) {
     <div className="office-frame realistic-office">
       <div className="office-toolbar">
         <div className="office-actions">
-          <div className="office-legend"><span><i className="working" />Working</span><span><i className="waiting" />Waiting</span><span><i />On break</span></div>
+          <div className="office-legend"><span><i className="working" />Working</span><span><i className="queued" />Queued</span><span><i className="waiting" />Waiting</span><span><i />On break</span></div>
+          <button className={replayActive ? 'replay-button active' : 'replay-button'} onClick={() => { setReplayIndex(0); setReplayActive((value) => !value); }} disabled={!replayable.length}>{replayActive ? '■ Stop replay' : '▶ Replay day'}</button>
           <button className={controlsOpen ? 'view-button active' : 'view-button'} onClick={() => setControlsOpen(!controlsOpen)} aria-expanded={controlsOpen}>☷ <span>View</span></button>
           {controlsOpen && (
             <div className="view-menu">
               <div className="view-menu-head"><strong>Office view</strong><button onClick={() => setControlsOpen(false)} aria-label="Close view controls">×</button></div>
               <label>Show agents</label>
               <div className="control-pills">
-                {['all', 'working', 'waiting', 'idle'].map((status) => (
+                {['all', 'working', 'queued', 'waiting', 'error', 'idle'].map((status) => (
                   <button className={statusFilter === status ? 'active' : ''} key={status} onClick={() => setStatusFilter(status)}>{status === 'idle' ? 'Break' : titleCase(status)}</button>
                 ))}
               </div>
@@ -201,6 +305,7 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent }) {
 
       <div ref={mapRef} className={`office-map theme-${theme}`} style={{ backgroundImage: `url(${THEMES[theme]?.image || officeBackground})` }}>
         <div className="office-vignette" />
+        {replayEvent && <div className="replay-banner"><span>REPLAY {replayIndex + 1}/{replayable.length}</span><strong>{replayEvent.agent} · {replayEvent.task_title}</strong><small>{titleCase(replayEvent.kind)} · {new Date(replayEvent.timestamp).toLocaleString()}</small></div>}
         {showLabels && roomOrder.map((room) => (
           <button className={`room-label room-${room} ${roomFilter === room ? 'selected' : ''}`} key={room} onClick={() => setRoomFilter(roomFilter === room ? 'all' : room)}>
             <span>{ROOMS[room].icon}</span>
@@ -212,14 +317,24 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent }) {
         <div className="walking-path path-horizontal" />
         <div className="walking-path path-vertical" />
 
+        {featuredProjects.length > 0 && <div className={`meeting-project-stack ${featuredProjects.length === 1 ? 'single' : 'multiple'}`}>
+          {featuredProjects.map((project) => <button className="meeting-project-board" key={project.id} onClick={() => onSelectProject?.(project)} aria-label={`Open ${projectName(project)} project`}>
+            <span>ACTIVE PROJECT</span>
+            <strong>{projectName(project)}</strong>
+            <small>{project.tasks.filter((task) => task.status === 'done').length} of {project.tasks.length} tasks complete</small>
+            <i><i style={{ width: `${project.progress}%` }} /></i>
+            <em>{project.progress}%</em>
+          </button>)}
+        </div>}
+
         {visibleAgents.map((agent, index) => {
           const palette = CHARACTER_PALETTES[index % CHARACTER_PALETTES.length];
           const moving = movingAgents.includes(agent.id);
           const facing = facingFor(agent, index, moving);
           return (
           <div
-            className={`map-agent agent-${agent.name.toLowerCase().replace(/[^a-z0-9_-]+/g, '-')} ${agent.status} ${agent.room} facing-${facing} hair-${index % 4} ${moving ? 'moving' : ''} ${selectedAgent?.id === agent.id ? 'selected' : ''}`}
-            style={{ '--left': `${agent.left}%`, '--top': `${agent.top}%`, '--depth': 20 + Math.round(agent.top), '--delay': `${index * -0.8}s`, '--agent-accent': palette.accent, '--agent-dark': palette.dark, '--agent-hair': palette.hair, '--agent-skin': palette.skin }}
+            className={`map-agent agent-${agent.name.toLowerCase().replace(/[^a-z0-9_-]+/g, '-')} ${agent.status} ${agent.room} facing-${facing} hair-${index % 4} ${moving ? 'moving' : ''} ${!moving ? 'seated' : ''} ${selectedAgent?.id === agent.id ? 'selected' : ''}`}
+            style={{ '--left': `${agent.currentPosition[0]}%`, '--top': `${agent.currentPosition[1]}%`, '--depth': 20 + Math.round(agent.currentPosition[1]), '--delay': `${index * -0.8}s`, '--agent-accent': palette.accent, '--agent-dark': palette.dark, '--agent-hair': palette.hair, '--agent-skin': palette.skin }}
             key={agent.id}
             title={`${agent.name} · ${ROOMS[agent.room].label} · ${agent.current_task || agent.status}`}
           >
@@ -231,6 +346,7 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent }) {
             >
               <b>{speechIntro(agent)}</b>
               <span>{agent.current_task || ROOMS[agent.room].subtitle}</span>
+              {openBubble === agent.id && agent.progress_label && <AgentProgress agent={agent} labelled />}
               <small>{openBubble === agent.id ? 'Click to close' : 'Click to read'}</small>
             </button>}
             <button className="person-button" onClick={() => onSelectAgent?.(agent)} aria-label={`Open ${agent.name} profile`}>
@@ -241,6 +357,7 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent }) {
               </span>
             </button>
             <span className="agent-nameplate"><b>{agent.name.length > 14 ? `${agent.name.slice(0, 12)}…` : agent.name}</b><small aria-label={agent.status} title={agent.status} /></span>
+            {agent.progress_label && <AgentProgress agent={agent} />}
           </div>
           );
         })}
@@ -254,13 +371,33 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent }) {
   );
 }
 
+function AgentProgress({ agent, labelled = false }) {
+  const indeterminate = agent.progress_value == null;
+  const label = String(agent.progress_label || '');
+  const mode = String(agent.progress_mode || '');
+  return <span className={`map-task-progress ${mode} ${labelled ? 'labelled' : ''}`} title={label}>
+    {labelled && <b>{label}{!indeterminate ? ` · ${agent.progress_value}% workflow` : ''}</b>}
+    <span role="progressbar" aria-label={`${agent.name}: ${label}`} aria-valuemin="0" aria-valuemax="100" {...(!indeterminate ? { 'aria-valuenow': Number(agent.progress_value) || 0 } : {})}>
+      <i style={!indeterminate ? { width: `${agent.progress_value}%` } : undefined} />
+    </span>
+  </span>;
+}
+
 function titleCase(value) {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
+function projectName(room) {
+  const id = String(room?.project_id || '');
+  if (id && !id.startsWith('p_')) return id.replace(/[-_]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+  return room?.name || 'Active project';
+}
+
 function speechIntro(agent) {
   if (agent.status === 'idle') return 'Taking a break';
+  if (agent.status === 'queued') return 'Queued for work';
   if (agent.status === 'waiting') return 'Waiting on this';
+  if (agent.status === 'error') return 'Needs attention';
   if (agent.name === 'Friday') return 'Coordinating the team';
   if (agent.name === 'Atlas') return 'Managing the pipeline';
   return 'Working on this';
@@ -268,6 +405,9 @@ function speechIntro(agent) {
 
 function facingFor(agent, index, moving) {
   if (moving) return index % 2 ? 'left' : 'right';
+  const facings = ROOMS[agent.room]?.facings;
+  if (facings && facings.length && agent.seatFacing) return agent.seatFacing;
+  if (agent.room === 'meeting' && agent.seatFacing) return agent.seatFacing;
   if (agent.status === 'working') return index % 2 ? 'left' : 'right';
   return 'front';
 }

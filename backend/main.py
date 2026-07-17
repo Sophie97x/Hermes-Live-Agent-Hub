@@ -306,7 +306,7 @@ def read_agents() -> list[dict]:
             last_activity_at = _iso(task.get("run_last_heartbeat_at") or task.get("last_heartbeat_at"))
             task_id = task.get("id")
             run_id = task.get("run_id")
-            progress = _task_progress(task.get("status"))
+            progress = _task_progress(task.get("status"), started_at)
         else:
             status, status_reason = "idle", "available"
             current_task = "Available for the next assignment"
@@ -366,16 +366,35 @@ def _task_runtime_status(task: dict, now: float) -> tuple[str, str]:
     return "queued", "assigned"
 
 
-def _task_progress(task_status: Optional[str]) -> dict:
+def _elapsed_label(started_at: Optional[str]) -> str:
+    if not started_at:
+        return "Running"
+    try:
+        started = datetime.fromisoformat(started_at)
+        elapsed = max(0, time.time() - started.timestamp())
+        minutes = int(elapsed // 60)
+        seconds = int(elapsed % 60)
+        if minutes < 1:
+            return f"Running for {seconds}s"
+        if minutes < 60:
+            return f"Running for {minutes}m {seconds}s"
+        hours = minutes // 60
+        minutes = minutes % 60
+        return f"Running for {hours}h {minutes}m"
+    except Exception:
+        return "Running"
+
+
+def _task_progress(task_status: Optional[str], started_at: Optional[str] = None) -> dict:
     """Represent verified workflow stage, not an invented completion estimate."""
     status = str(task_status or "").lower()
     stages = {
         "todo": (12, "Queued"),
         "ready": (20, "Ready"),
         "queued": (20, "Queued"),
-        "active": (46, "Running"),
-        "running": (46, "Running"),
-        "in_progress": (46, "Running"),
+        "active": (46, _elapsed_label(started_at)),
+        "running": (46, _elapsed_label(started_at)),
+        "in_progress": (46, _elapsed_label(started_at)),
         "blocked": (46, "Paused"),
         "in_review": (82, "In review"),
         "review": (82, "In review"),
