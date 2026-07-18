@@ -467,7 +467,7 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [],
             <button className="person-button" onClick={() => onSelectAgent?.(agent)} aria-label={`Open ${agent.name} profile`}>
               <span className="map-person">
                 <i className="map-head"><i className="eyes" /></i><i className="hair" />
-                <i className="map-body"><i className="role-badge">{roleIcon(agent.name)}</i></i>
+                <i className="map-body"><i className="role-badge">{roleIcon(agent)}</i></i>
                 <i className="map-arm left" /><i className="map-arm right" /><i className="map-legs" />
               </span>
             </button>
@@ -530,8 +530,10 @@ function facingFor(agent, index) {
   return 'front';
 }
 
-function roleIcon(name) {
-  return { Friday: '◆', Atlas: '◈', Orion: '⌕', Devin: '‹›', Quinn: '✓', Scribe: '✎', Maya: '◇', Scout: '⌁', Studio: '✦' }[name] || '•';
+function roleIcon(agent) {
+  const bySource = { claude: '✱', codex: '⌬', openclaw: '☍' };
+  if (bySource[agent.source]) return bySource[agent.source];
+  return { Friday: '◆', Atlas: '◈', Orion: '⌕', Devin: '‹›', Quinn: '✓', Scribe: '✎', Maya: '◇', Scout: '⌁', Studio: '✦' }[agent.name] || '•';
 }
 
 export default OfficeFloor;

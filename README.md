@@ -37,6 +37,8 @@ It is deliberately lightweight. The characters and movement use small CSS animat
 - Shows hub uptime, gateway health, failed work and stuck jobs in one compact panel
 - Provides in-app failure alerts and a one-click self-recovering restart
 - Uses server-sent events for live updates and pauses background polling when the tab is hidden
+- Also discovers local Claude Code, Codex and OpenClaw sessions and seats them in the office alongside the Hermes team
+- Includes a Settings page to enable or disable each agent source, point at custom state directories and tune activity windows
 
 ## What “live” means
 
@@ -70,7 +72,7 @@ Hermes local state (~/.hermes)
                   React office UI
 ```
 
-The backend reads local SQLite and JSON files without modifying them. It automatically merges the legacy Kanban database with every project-scoped board under `~/.hermes/kanban/boards/`, so newly created project work appears without restarting or reconfiguring the hub. Agent profiles are scanned from the Hermes profiles directory, so adding or removing an agent does not require editing the frontend.
+The backend reads local SQLite and JSON files without modifying them. It can also read the session transcripts other local coding agents keep on disk — Claude Code (`~/.claude/projects`), Codex (`~/.codex/sessions`) and OpenClaw (`~/.openclaw`) — so those tools appear in the office when they are active. Each source can be switched off or repointed from the Settings page, which persists to `~/.config/hermes-agent-hub/settings.json`, the only file the hub ever writes. It automatically merges the legacy Kanban database with every project-scoped board under `~/.hermes/kanban/boards/`, so newly created project work appears without restarting or reconfiguring the hub. Agent profiles are scanned from the Hermes profiles directory, so adding or removing an agent does not require editing the frontend.
 
 Project Rooms are derived from real project IDs, linked task graphs and originating Hermes sessions. The timeline excludes noisy heartbeat events, while office replay uses those same verified task events rather than fabricated animation data. Conversation history only shows locally stored messages already linked to an agent's task or worker session.
 

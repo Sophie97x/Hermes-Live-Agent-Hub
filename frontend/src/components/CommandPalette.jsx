@@ -4,7 +4,7 @@ import './CommandPalette.css';
 function CommandPalette({ open, onClose, agents = [], rooms = [], tasks = [], onCommand }) {
   const [query, setQuery] = useState('');
   const commands = useMemo(() => [
-    ...[['office', 'Open office', '⌂'], ['projects', 'Open project rooms', '◆'], ['timeline', 'Open task timeline', '◷'], ['tasks', 'Open task board', '▦'], ['schedule', 'Open schedules', '◴']].map(([id, label, icon]) => ({ id: `view-${id}`, label, icon, type: 'view', value: id })),
+    ...[['office', 'Open office', '⌂'], ['projects', 'Open project rooms', '◆'], ['timeline', 'Open task timeline', '◷'], ['tasks', 'Open task board', '▦'], ['schedule', 'Open schedules', '◴'], ['settings', 'Open settings', '⚙']].map(([id, label, icon]) => ({ id: `view-${id}`, label, icon, type: 'view', value: id })),
     ...agents.map((agent) => ({ id: agent.id, label: agent.name, detail: agent.current_task, icon: '◉', type: 'agent', value: agent })),
     ...rooms.map((room) => ({ id: room.id, label: room.name, detail: `${room.progress}% complete`, icon: '◆', type: 'project', value: room })),
     ...tasks.slice(0, 60).map((task) => ({ id: `task-${task.id}`, label: task.title, detail: task.assignee, icon: '□', type: 'task', value: task })),

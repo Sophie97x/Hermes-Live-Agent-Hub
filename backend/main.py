@@ -18,6 +18,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 
+try:
+    from . import external_agents
+except ImportError:  # started as `uvicorn main:app` from backend/
+    import external_agents
+
 app = FastAPI(title="Hermes Agent Hub")
 HUB_STARTED_AT = time.time()
 
@@ -328,6 +333,7 @@ def read_agents() -> list[dict]:
             "role": member["role"],
             "specialty": member["specialty"],
             "home": member["home"],
+            "source": "hermes",
             "status": status,
             "status_reason": status_reason,
             "current_task": current_task,
@@ -339,6 +345,7 @@ def read_agents() -> list[dict]:
             "position": {"top": 10 + index * 12, "left": 10 + (index % 3) * 20},
         })
 
+    agents.extend(external_agents.read_external_agents())
     return agents
 
 
@@ -871,6 +878,22 @@ async def get_gateway():
 @app.get("/api/health")
 async def get_health():
     return read_health()
+
+
+@app.get("/api/settings")
+async def get_settings():
+    settings = external_agents.load_settings()
+    return {"settings": settings, "detected": external_agents.source_counts(settings)}
+
+
+@app.put("/api/settings")
+async def put_settings(request: Request):
+    try:
+        patch = await request.json()
+    except Exception:
+        patch = {}
+    settings = external_agents.save_settings(patch if isinstance(patch, dict) else {})
+    return {"settings": settings, "detected": external_agents.source_counts(settings)}
 
 
 async def _restart_hub() -> None:

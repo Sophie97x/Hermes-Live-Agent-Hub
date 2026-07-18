@@ -212,3 +212,7 @@
 :root[data-theme="light"] .workload-row>span{color:#3c3552}
 :root[data-theme="light"] .workload-row>i{background:#eeecf7}
 :root[data-theme="light"] .workload-row>em{color:#847ea0}
+
+/* External agent source badges (Claude Code / Codex / OpenClaw). */
+.source-badge{display:inline-block;margin-left:8px;padding:2px 7px;border:1px solid #3a3f52;border-radius:999px;background:#232838;color:#a8a1c8;font:600 9px system-ui,sans-serif;font-style:normal;letter-spacing:.04em;text-transform:uppercase;vertical-align:2px}
+:root[data-theme="light"] .source-badge{border-color:#dcd8ea;background:#eeeafb;color:#5a4bb8}

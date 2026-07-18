@@ -1,0 +1,39 @@
+.settings-page { display: grid; gap: 18px; max-width: 760px; }
+.settings-loading { padding: 40px; color: #989eab; }
+.settings-group { display: grid; gap: 12px; padding: 20px; border: 1px solid #2b303d; border-radius: 16px; background: linear-gradient(145deg, #171b24, #13161e); }
+.settings-group > header h3 { margin: 0 0 6px; font: 700 16px system-ui, sans-serif; }
+.settings-group > header p { margin: 0; color: #989eab; font-size: 12.5px; line-height: 1.55; max-width: 620px; }
+.settings-source { display: grid; gap: 10px; padding: 14px; border: 1px solid #2b303d; border-radius: 12px; background: #12151d; opacity: .72; transition: opacity .2s, border-color .2s; }
+.settings-source.enabled { opacity: 1; border-color: #3a3f52; }
+.settings-source-head { display: flex; align-items: center; gap: 12px; }
+.settings-source-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: #232838; color: #c9c3ff; font-size: 15px; }
+.settings-source-head > div { display: grid; gap: 1px; min-width: 0; flex: 1; }
+.settings-source-head strong { font-size: 14px; }
+.settings-source-head small { color: #989eab; font-size: 11.5px; }
+.settings-source-head em { color: #7d8494; font-size: 11px; font-style: normal; white-space: nowrap; }
+.settings-source-head em.found { color: #62d39e; }
+.settings-source label { display: grid; gap: 5px; }
+.settings-source label span, .settings-numbers label span { color: #989eab; font-size: 11px; }
+.settings-source input, .settings-numbers input { padding: 9px 11px; border: 1px solid #303544; border-radius: 9px; background: #0f1219; color: #e8e6f0; font: 500 12.5px ui-monospace, monospace; }
+.settings-source input:focus, .settings-numbers input:focus { outline: none; border-color: #7662d2; }
+.settings-numbers { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.settings-numbers label { display: grid; gap: 5px; }
+.settings-numbers label em { color: #6d7382; font-style: normal; }
+.settings-page .toggle { position: relative; flex: 0 0 auto; width: 40px; height: 22px; border: 1px solid #3a3f52; border-radius: 999px; background: #232838; cursor: pointer; transition: background .2s, border-color .2s; }
+.settings-page .toggle i { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #8d93a3; transition: transform .2s, background .2s; }
+.settings-page .toggle.on { border-color: #6d5ed1; background: #4b3fa8; }
+.settings-page .toggle.on i { transform: translateX(18px); background: #fff; }
+.settings-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.settings-footer small { color: #7d8494; font-size: 11.5px; }
+.settings-save { padding: 11px 22px; border: 1px solid #6d5ed1; border-radius: 11px; background: linear-gradient(145deg, #7565e8, #4e43ac); color: #fff; font: 700 13px system-ui, sans-serif; cursor: pointer; }
+.settings-save:hover { filter: brightness(1.12); }
+.settings-save:disabled { opacity: .6; cursor: default; }
+
+:root[data-theme="light"] .settings-group { border-color: #e2dfec; background: linear-gradient(145deg, #fff, #f8f7fc); }
+:root[data-theme="light"] .settings-group > header p, :root[data-theme="light"] .settings-source-head small, :root[data-theme="light"] .settings-source label span, :root[data-theme="light"] .settings-numbers label span { color: #726d87; }
+:root[data-theme="light"] .settings-source { border-color: #e2dfec; background: #fbfaff; }
+:root[data-theme="light"] .settings-source.enabled { border-color: #cfc8e8; }
+:root[data-theme="light"] .settings-source-icon { background: #eeeafb; color: #4633b0; }
+:root[data-theme="light"] .settings-source input, :root[data-theme="light"] .settings-numbers input { border-color: #dcd8ea; background: #fff; color: #2c2840; }
+:root[data-theme="light"] .settings-page .toggle { border-color: #dcd8ea; background: #eceaf4; }
+:root[data-theme="light"] .settings-footer small { color: #8c87a0; }

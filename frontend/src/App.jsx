@@ -6,6 +6,7 @@ import OfficeFloor from './components/OfficeFloor';
 import ProjectRooms, { ProjectRoomDrawer } from './components/ProjectRooms';
 import TaskTimeline from './components/TaskTimeline';
 import CommandPalette from './components/CommandPalette';
+import SettingsPage from './components/SettingsPage';
 import './App.css';
 
 const API = import.meta.env.DEV ? 'http://localhost:3001' : '';
@@ -17,7 +18,10 @@ const navItems = [
   ['timeline', 'Timeline', 'ϟ'],
   ['tasks', 'Task board', '▦'],
   ['schedule', 'Schedules', '◷'],
+  ['settings', 'Settings', '⚙'],
 ];
+
+const SOURCE_LABELS = { claude: 'Claude Code', codex: 'Codex', openclaw: 'OpenClaw' };
 const viewIds = new Set(navItems.map(([id]) => id));
 
 function viewFromLocation() {
@@ -73,6 +77,8 @@ function App() {
   const [restarting, setRestarting] = useState(false);
   const [toast, setToast] = useState(null);
   const [commandOpen, setCommandOpen] = useState(false);
+  const [settingsData, setSettingsData] = useState(null);
+  const [savingSettings, setSavingSettings] = useState(false);
   const [desktopAlerts, setDesktopAlerts] = useState(() => window.localStorage.getItem('hermes-desktop-alerts') === 'on');
   const [uiTheme, setUiTheme] = useState(() => window.localStorage.getItem('hermes-ui-theme') === 'light' ? 'light' : 'dark');
   const knownAlerts = useRef(new Set());
@@ -164,6 +170,32 @@ function App() {
       eventSource.close();
     };
   }, []);
+
+  useEffect(() => {
+    fetch(`${API}/api/settings`)
+      .then((response) => response.ok ? response.json() : null)
+      .then((data) => { if (data) setSettingsData(data); })
+      .catch(() => {});
+  }, []);
+
+  const saveSettings = async (patch) => {
+    setSavingSettings(true);
+    try {
+      const response = await fetch(`${API}/api/settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      if (!response.ok) throw new Error('save failed');
+      setSettingsData(await response.json());
+      setToast({ title: 'Settings saved', detail: 'Agent sources update on the next refresh.' });
+    } catch {
+      setToast({ title: 'Save failed', detail: 'The hub could not save the settings file.' });
+    } finally {
+      setSavingSettings(false);
+      window.setTimeout(() => setToast(null), 4000);
+    }
+  };
 
   useEffect(() => {
     const handleKey = (event) => {
@@ -386,7 +418,7 @@ function App() {
               {filteredAgents.length ? filteredAgents.map((agent, index) => (
                 <button className="roster-card" key={agent.id} onClick={() => setSelectedAgent(agent)}>
                   <span className={`mini-avatar tone-${index % 5}`}>{agent.name.slice(0, 2).toUpperCase()}</span>
-                  <span><strong>{agent.name}</strong><small>{agent.current_task || 'Available for work'}</small><TaskProgress item={agent} compact /></span>
+                  <span><strong>{agent.name}{SOURCE_LABELS[agent.source] && <i className="source-badge">{SOURCE_LABELS[agent.source]}</i>}</strong><small>{agent.current_task || 'Available for work'}</small><TaskProgress item={agent} compact /></span>
                   <em className={`status-text ${agent.status}`}>{agent.status}</em>
                 </button>
               )) : <EmptyState message={agentFilter === 'attention' ? 'Nobody needs attention.' : agentFilter === 'working' ? 'Nobody is working right now.' : 'No agents in this view.'} />}
@@ -400,6 +432,7 @@ function App() {
 
         {view === 'tasks' && <Panel title="Task board" subtitle={`${allTaskCount} task records across the live workflow and archive`} actions={<ExportButtons onExport={exportTasks} disabled={!allTasks.length} />}><KanbanBoard board={kanban} /></Panel>}
         {view === 'schedule' && <Panel title="Scheduled work" subtitle="Cron jobs managed by Hermes"><CronJobs jobs={cron} /></Panel>}
+        {view === 'settings' && <Panel title="Settings" subtitle="Configure which local coding agents join the office"><SettingsPage data={settingsData} onSave={saveSettings} saving={savingSettings} /></Panel>}
       </main>
 
       {selectedAgent && (
@@ -410,6 +443,7 @@ function App() {
             <p className="eyebrow">AGENT PROFILE</p>
             <h2>{selectedAgent.name}</h2>
             {selectedAgent.role && <p className="drawer-role">{selectedAgent.role} · {selectedAgent.specialty}</p>}
+            {SOURCE_LABELS[selectedAgent.source] && <p className="drawer-role">Discovered from {SOURCE_LABELS[selectedAgent.source]} session files on this machine</p>}
             <span className={`drawer-status ${selectedAgent.status}`}>{selectedAgent.status}</span>
             <div className="drawer-detail"><small>Live state</small><strong>{statusReason(selectedAgent.status_reason)}</strong></div>
             <div className="drawer-detail"><small>Current assignment</small><strong>{selectedAgent.current_task || 'Waiting for an assignment'}</strong></div>
