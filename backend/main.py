@@ -45,14 +45,20 @@ OBSIDIAN_PROJECTS = Path(
 # ── helpers ──────────────────────────────────────────────────────────
 
 def _query(db_path: Path, sql: str, params: tuple = ()) -> list[dict]:
+    # Read-only URI mode: never creates a missing database file and cannot
+    # write to Hermes state, keeping the hub's read-only promise.
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except Exception:
+        return []
+    try:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(sql, params).fetchall()
-        conn.close()
         return [dict(r) for r in rows]
     except Exception:
         return []
+    finally:
+        conn.close()
 
 
 def _kanban_db_paths() -> list[Path]:

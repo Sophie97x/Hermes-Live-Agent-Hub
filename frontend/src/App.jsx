@@ -96,7 +96,8 @@ function App() {
       if (disconnectTimer) return;
       disconnectTimer = window.setTimeout(() => {
         disconnectTimer = null;
-        if (mounted) setConnected(false);
+        if (!mounted) return;
+        setConnected(false);
         fetchData();
       }, 5000);
     };
@@ -105,7 +106,6 @@ function App() {
       try {
         const responses = await Promise.all([
           fetch(`${API}/api/agents`),
-          fetch(`${API}/api/activity`),
           fetch(`${API}/api/kanban`),
           fetch(`${API}/api/cron`),
           fetch(`${API}/api/health`),
@@ -114,7 +114,7 @@ function App() {
           fetch(`${API}/api/conversations`),
         ]);
         if (!responses[0].ok) throw new Error('Core API unavailable');
-        const [nextAgents, , nextKanban, nextCron, nextHealth, nextRooms, nextTimeline, nextConversations] = await Promise.all(
+        const [nextAgents, nextKanban, nextCron, nextHealth, nextRooms, nextTimeline, nextConversations] = await Promise.all(
           responses.map((response) => response.ok ? response.json() : null),
         );
         if (!mounted) return;

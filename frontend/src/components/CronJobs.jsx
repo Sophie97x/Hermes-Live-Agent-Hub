@@ -17,7 +17,7 @@ function CronJobs({ jobs = [] }) {
       {jobs.map(job => (
         <article key={job.id} className="cron-job-item">
           <header><strong>{job.name}</strong><span className={`cron-status cron-status-${job.status}`}>{job.status}</span></header>
-          <p className="cron-schedule">{typeof job.schedule === 'string' ? job.schedule : job.schedule?.display || 'Not scheduled'}</p>
+          <p className="cron-schedule">{job.schedule || 'Not scheduled'}</p>
           <dl>
             <div><dt>Next run</dt><dd>{formatDate(job.next_run)}</dd></div>
             <div><dt>Last run</dt><dd>{formatDate(job.last_run)}</dd></div>
