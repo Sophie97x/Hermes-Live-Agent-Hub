@@ -502,11 +502,12 @@ function EmptyState({ message }) {
 function TaskProgress({ item, compact = false }) {
   if (!item?.progress_label) return null;
   const mode = String(item.progress_mode || '');
-  // Running tasks show the bouncing activity bar, not a static stage percent.
+  // Running work shows a live advancing bar with a sheen; the bouncing
+  // activity bar remains only when no live value is available.
   const active = mode === 'active' || mode === 'activity';
-  const indeterminate = item.progress_value == null || active;
+  const indeterminate = item.progress_value == null;
   return (
-    <span className={`task-progress ${compact ? 'compact' : ''} ${active ? 'activity' : mode}`}>
+    <span className={`task-progress ${compact ? 'compact' : ''} ${active ? (indeterminate ? 'activity' : 'active') : mode}`}>
       <span className="task-progress-meta"><b>{item.progress_label}</b>{!compact && !indeterminate && <em>{item.progress_value}% workflow</em>}</span>
       <span className="task-progress-track" role="progressbar" aria-label={`${item.progress_label} workflow stage`} aria-valuemin="0" aria-valuemax="100" {...(!indeterminate ? { 'aria-valuenow': item.progress_value } : {})}>
         <i style={!indeterminate ? { width: `${item.progress_value}%` } : undefined} />

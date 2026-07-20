@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react';
 import './SettingsPage.css';
 
 const SOURCE_HELP = {
-  claude: ['✱', 'Claude Code sessions from ~/.claude/projects'],
-  codex: ['⌬', 'Codex CLI and desktop rollouts from ~/.codex/sessions'],
-  openclaw: ['☍', 'OpenClaw agent transcripts from ~/.openclaw'],
+  hermes: ['◆', 'The Hermes team: profiles, task boards and sessions from ~/.hermes', 'profile'],
+  claude: ['✱', 'Claude Code sessions from ~/.claude/projects', 'session'],
+  codex: ['⌬', 'Codex CLI and desktop rollouts from ~/.codex/sessions', 'session'],
+  openclaw: ['☍', 'OpenClaw agent transcripts from ~/.openclaw', 'session'],
 };
 
 function SettingsPage({ data, onSave, saving = false }) {
@@ -37,10 +38,10 @@ function SettingsPage({ data, onSave, saving = false }) {
       <section className="settings-group">
         <header>
           <h3>Agent sources</h3>
-          <p>The hub always shows the Hermes team. Other local coding agents can join the office when their session files show activity — everything is read directly from disk and nothing leaves this machine.</p>
+          <p>Every source is read directly from its local state on disk and nothing leaves this machine. Hermes provides the core team; other coding agents join the office when their session files show activity.</p>
         </header>
         {Object.entries(form.sources).map(([name, source]) => {
-          const [icon, help] = SOURCE_HELP[name] || ['•', ''];
+          const [icon, help, noun = 'session'] = SOURCE_HELP[name] || ['•', ''];
           const detected = data?.detected?.[name] ?? 0;
           return (
             <article key={name} className={`settings-source ${source.enabled ? 'enabled' : ''}`}>
@@ -50,7 +51,7 @@ function SettingsPage({ data, onSave, saving = false }) {
                   <strong>{source.label || name}</strong>
                   <small>{help}</small>
                 </div>
-                <em className={detected ? 'found' : ''}>{detected ? `${detected} session${detected === 1 ? '' : 's'} found` : 'Nothing found'}</em>
+                <em className={detected ? 'found' : ''}>{detected ? `${detected} ${noun}${detected === 1 ? '' : 's'} found` : 'Nothing found'}</em>
                 <button
                   type="button"
                   className={source.enabled ? 'toggle on' : 'toggle'}

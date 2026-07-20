@@ -126,10 +126,10 @@ function TaskCard({ task, column, dueDate, onDueDateChange }) {
 function TaskStage({ task }) {
   if (!task.progress_label) return null;
   const mode = String(task.progress_mode || '');
-  // Running tasks show the bouncing activity bar, not a static stage percent.
+  // Running work advances live; the bouncing bar is only the no-data fallback.
   const active = mode === 'active' || mode === 'activity';
-  const indeterminate = task.progress_value == null || active;
-  return <span className={`kanban-progress ${active ? 'activity' : mode}`}>
+  const indeterminate = task.progress_value == null;
+  return <span className={`kanban-progress ${active ? (indeterminate ? 'activity' : 'active') : mode}`}>
     <span><b>{task.progress_label}</b>{!indeterminate && <em>{task.progress_value}% workflow</em>}</span>
     <i><i style={!indeterminate ? { width: `${task.progress_value}%` } : undefined} /></i>
   </span>;

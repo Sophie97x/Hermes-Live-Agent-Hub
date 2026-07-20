@@ -5,6 +5,7 @@ No demo data, no simulated agents.
 """
 import asyncio
 import json
+import math
 import os
 import sqlite3
 import time
@@ -49,6 +50,48 @@ OBSIDIAN_PROJECTS = Path(
 
 # ── helpers ──────────────────────────────────────────────────────────
 
+def _hermes_settings() -> dict:
+    return external_agents.load_settings()["sources"].get("hermes") or {}
+
+
+def _hermes_enabled() -> bool:
+    return _hermes_settings().get("enabled", True)
+
+
+def _custom_hermes_home() -> Optional[Path]:
+    """A Hermes home chosen in Settings, when it differs from the default."""
+    home = _hermes_settings().get("home")
+    if not home:
+        return None
+    path = Path(home).expanduser()
+    return path if path != HERMES_HOME else None
+
+
+def _state_db() -> Path:
+    home = _custom_hermes_home()
+    return home / "state.db" if home else STATE_DB
+
+
+def _kanban_db() -> Path:
+    home = _custom_hermes_home()
+    return home / "kanban.db" if home else KANBAN_DB
+
+
+def _cron_jobs_file() -> Path:
+    home = _custom_hermes_home()
+    return home / "cron" / "jobs.json" if home else CRON_JOBS
+
+
+def _gateway_state_file() -> Path:
+    home = _custom_hermes_home()
+    return home / "gateway_state.json" if home else GATEWAY_STATE
+
+
+def _profiles_dir() -> Path:
+    home = _custom_hermes_home()
+    return home / "profiles" if home else PROFILES_DIR
+
+
 def _query(db_path: Path, sql: str, params: tuple = ()) -> list[dict]:
     # Read-only URI mode: never creates a missing database file and cannot
     # write to Hermes state, keeping the hub's read-only promise.
@@ -68,8 +111,9 @@ def _query(db_path: Path, sql: str, params: tuple = ()) -> list[dict]:
 
 def _kanban_db_paths() -> list[Path]:
     """Return the legacy board plus every current project-scoped board."""
-    paths = [KANBAN_DB]
-    boards_dir = KANBAN_DB.parent / "kanban" / "boards"
+    legacy = _kanban_db()
+    paths = [legacy]
+    boards_dir = legacy.parent / "kanban" / "boards"
     if boards_dir.exists():
         paths.extend(sorted(boards_dir.glob("*/kanban.db")))
     return [path for path in paths if path.is_file() and path.stat().st_size > 0]
@@ -78,8 +122,9 @@ def _kanban_db_paths() -> list[Path]:
 def _query_kanban(sql: str, params: tuple = ()) -> list[dict]:
     """Run a read across all Hermes boards and retain its board identity."""
     rows: list[dict] = []
+    legacy = _kanban_db()
     for db_path in _kanban_db_paths():
-        board_id = db_path.parent.name if db_path != KANBAN_DB else "legacy"
+        board_id = db_path.parent.name if db_path != legacy else "legacy"
         for row in _query(db_path, sql, params):
             row["_board_id"] = board_id
             rows.append(row)
@@ -211,10 +256,11 @@ def discover_team() -> list[dict]:
     """Discover the current Hermes profile roster directly from disk."""
     friday = {"name": "Friday", "role": "Chief of Staff", "specialty": "Orchestration", "home": "operations"}
     members: list[dict] = []
-    if not PROFILES_DIR.exists():
+    profiles_dir = _profiles_dir()
+    if not profiles_dir.exists():
         return [friday]
 
-    for profile_path in PROFILES_DIR.glob("*/profile.yaml"):
+    for profile_path in profiles_dir.glob("*/profile.yaml"):
         key = profile_path.parent.name.strip().lower()
         if not key or key in _SESSION_SOURCE_AGENT_NAMES or key.startswith("."):
             continue
@@ -237,6 +283,8 @@ def discover_team() -> list[dict]:
 
 def read_agents() -> list[dict]:
     """Return Friday plus every real Hermes profile, never raw transport sessions."""
+    if not _hermes_enabled():
+        return external_agents.read_external_agents()
     task_rows = _query_kanban("""
         SELECT t.id, t.assignee, t.title, t.status, t.created_at,
                t.started_at, t.worker_pid, t.last_heartbeat_at,
@@ -268,7 +316,7 @@ def read_agents() -> list[dict]:
     for row in task_rows:
         latest_task.setdefault(str(row["assignee"]).lower(), row)
 
-    recent_sessions = _query(STATE_DB, """
+    recent_sessions = _query(_state_db(), """
         SELECT s.id, s.title, s.source, s.started_at, s.ended_at,
                MAX(m.timestamp) AS last_activity_at
         FROM sessions s
@@ -306,9 +354,9 @@ def read_agents() -> list[dict]:
             task_id = None
             run_id = None
             progress = {
-                "progress_value": None,
+                "progress_value": _live_progress_value(started_at, 12, 92) if status == "working" else None,
                 "progress_label": "Live session" if status == "working" else None,
-                "progress_mode": "activity" if status == "working" else None,
+                "progress_mode": "active" if status == "working" else None,
             }
         elif task:
             status, status_reason = _task_runtime_status(task, now)
@@ -398,16 +446,61 @@ def _elapsed_label(started_at: Optional[str]) -> str:
         return "Running"
 
 
+_median_run_cache: tuple[float, float] = (0.0, 600.0)
+
+
+def _median_run_seconds() -> float:
+    """Median duration of recently completed runs, for scaling live progress."""
+    global _median_run_cache
+    cached_at, cached_value = _median_run_cache
+    now = time.time()
+    if now - cached_at < 300:
+        return cached_value
+    rows = _query_kanban("""
+        SELECT started_at, ended_at FROM task_runs
+        WHERE started_at IS NOT NULL AND ended_at IS NOT NULL
+        ORDER BY ended_at DESC LIMIT 50
+    """)
+    durations = sorted(
+        row["ended_at"] - row["started_at"]
+        for row in rows
+        if isinstance(row.get("started_at"), (int, float))
+        and isinstance(row.get("ended_at"), (int, float))
+        and row["ended_at"] > row["started_at"]
+    )
+    value = durations[len(durations) // 2] if durations else 600.0
+    _median_run_cache = (now, max(60.0, float(value)))
+    return _median_run_cache[1]
+
+
+def _live_progress_value(started_at: Optional[str], floor: int = 46, ceiling: int = 82) -> int:
+    """A moving value between two workflow stages, scaled by typical run time.
+
+    Fills asymptotically from the Running stage toward (never reaching) the
+    Review stage, so the bar advances live without inventing completion.
+    """
+    if not started_at:
+        return floor
+    try:
+        elapsed = max(0.0, time.time() - datetime.fromisoformat(started_at).timestamp())
+    except (TypeError, ValueError):
+        return floor
+    span = ceiling - 1 - floor
+    return floor + min(span, round(span * (1 - math.exp(-elapsed / _median_run_seconds()))))
+
+
 def _task_progress(task_status: Optional[str], started_at: Optional[str] = None) -> dict:
-    """Represent verified workflow stage, not an invented completion estimate."""
+    """Represent verified workflow stage; running tasks advance against the
+    team's real median run time rather than an invented completion percent."""
     status = str(task_status or "").lower()
+    live = _live_progress_value(started_at)
     stages = {
         "todo": (12, "Queued"),
         "ready": (20, "Ready"),
         "queued": (20, "Queued"),
-        "active": (46, _elapsed_label(started_at)),
-        "running": (46, _elapsed_label(started_at)),
-        "in_progress": (46, _elapsed_label(started_at)),
+        "active": (live, _elapsed_label(started_at)),
+        "running": (live, _elapsed_label(started_at)),
+        "in_progress": (live, _elapsed_label(started_at)),
         "blocked": (46, "Paused"),
         "in_review": (82, "In review"),
         "review": (82, "In review"),
@@ -424,7 +517,7 @@ def _task_progress(task_status: Optional[str], started_at: Optional[str] = None)
 
 
 def read_activity() -> list[dict]:
-    rows = _query(STATE_DB, """
+    rows = _query(_state_db(), """
         SELECT id, title, source, started_at, ended_at, end_reason,
                message_count, tool_call_count
         FROM sessions ORDER BY started_at DESC LIMIT 15
@@ -450,7 +543,7 @@ def read_activity() -> list[dict]:
 
 
 def read_sessions() -> list[dict]:
-    rows = _query(STATE_DB, """
+    rows = _query(_state_db(), """
         SELECT id, title, source, started_at, ended_at, end_reason,
                message_count, tool_call_count
         FROM sessions ORDER BY started_at DESC LIMIT 50
@@ -471,7 +564,7 @@ def read_sessions() -> list[dict]:
 
 
 def read_cron() -> list[dict]:
-    data = _read_json(CRON_JOBS)
+    data = _read_json(_cron_jobs_file())
     jobs = data.get("jobs", [])
 
     def schedule_label(job: dict) -> str:
@@ -537,8 +630,12 @@ def read_kanban() -> dict:
             "failure": r["last_failure_error"] or "",
             "created_at": _iso(r["created_at"]),
             "finished_at": _iso(r["completed_at"] or r["archived_at"]) if (r["completed_at"] or r["archived_at"]) else None,
-            **_task_progress(r["status"]),
+            **_task_progress(r["status"], _iso(r["started_at"])),
         })
+    for card in external_agents.read_external_tasks():
+        board[card.pop("column")].append(card)
+    for column in ("in_progress", "completed"):
+        board[column].sort(key=lambda card: card.get("finished_at") or card.get("created_at") or "", reverse=True)
     return board
 
 
@@ -608,7 +705,7 @@ def read_project_rooms() -> list[dict]:
         placeholders = ",".join("?" for _ in session_ids)
         session_titles = {
             row["id"]: row["title"]
-            for row in _query(STATE_DB, f"SELECT id, title FROM sessions WHERE id IN ({placeholders})", session_ids)
+            for row in _query(_state_db(), f"SELECT id, title FROM sessions WHERE id IN ({placeholders})", session_ids)
             if row.get("title")
         }
 
@@ -727,7 +824,7 @@ def read_agent_conversations() -> dict[str, list[dict]]:
             if session_id and session_id not in sessions_by_agent.setdefault(agent, []):
                 sessions_by_agent[agent].append(session_id)
 
-    recent_main = _query(STATE_DB, """
+    recent_main = _query(_state_db(), """
         SELECT id FROM sessions WHERE source NOT IN ('cron', 'subagent')
         ORDER BY started_at DESC LIMIT 4
     """)
@@ -739,7 +836,7 @@ def read_agent_conversations() -> dict[str, list[dict]]:
         if not selected:
             continue
         placeholders = ",".join("?" for _ in selected)
-        rows = _query(STATE_DB, f"""
+        rows = _query(_state_db(), f"""
             SELECT m.id, m.session_id, m.role, m.content, m.tool_name, m.timestamp,
                    s.title AS session_title
             FROM messages m JOIN sessions s ON s.id = m.session_id
@@ -757,7 +854,7 @@ def read_agent_conversations() -> dict[str, list[dict]]:
 
 
 def read_gateway() -> dict:
-    return _read_json(GATEWAY_STATE)
+    return _read_json(_gateway_state_file())
 
 
 def _timestamp(value) -> Optional[float]:
@@ -779,7 +876,7 @@ def read_health() -> dict:
     alerts: list[dict] = []
     stuck_jobs: list[dict] = []
 
-    if not gateway_online:
+    if not gateway_online and _hermes_enabled():
         alerts.append({"id": "gateway-offline", "level": "error", "title": "Hermes gateway offline", "detail": "Agent activity cannot be verified."})
 
     for agent in read_agents():

@@ -489,12 +489,12 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [],
 
 function AgentProgress({ agent, labelled = false }) {
   const mode = String(agent.progress_mode || '');
-  // A running task has no honest completion percentage — show the bouncing
-  // activity bar instead of a value frozen at the workflow stage (46%).
+  // Running work advances live (scaled by real median run time); the
+  // bouncing activity bar remains only when no live value is available.
   const active = mode === 'active' || mode === 'activity';
-  const indeterminate = agent.progress_value == null || active;
+  const indeterminate = agent.progress_value == null;
   const label = String(agent.progress_label || '');
-  return <span className={`map-task-progress ${active ? 'activity' : mode} ${labelled ? 'labelled' : ''}`} title={label}>
+  return <span className={`map-task-progress ${active ? (indeterminate ? 'activity' : 'active') : mode} ${labelled ? 'labelled' : ''}`} title={label}>
     {labelled && <b>{label}{!indeterminate ? ` · ${agent.progress_value}% workflow` : ''}</b>}
     <span role="progressbar" aria-label={`${agent.name}: ${label}`} aria-valuemin="0" aria-valuemax="100" {...(!indeterminate ? { 'aria-valuenow': Number(agent.progress_value) || 0 } : {})}>
       <i style={!indeterminate ? { width: `${agent.progress_value}%` } : undefined} />

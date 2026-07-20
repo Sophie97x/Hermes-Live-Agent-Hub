@@ -68,11 +68,67 @@ class ExternalAgentTests(unittest.TestCase):
         self.assertEqual(agents[0]["source"], "codex")
         self.assertEqual(agents[0]["name"], "Codex · Red-Quail")
 
+    def test_hermes_source_never_duplicates_roster(self):
+        settings = self.settings()
+        self.assertIn("hermes", settings["sources"])
+        (self.root / "hermes" / "profiles" / "devin").mkdir(parents=True)
+        (self.root / "hermes" / "profiles" / "devin" / "profile.yaml").write_text("description: dev")
+        self.assertEqual(external_agents.read_external_agents(settings), [])
+        self.assertEqual(external_agents.source_counts(settings)["hermes"], 1)
+
+    def test_disabled_hermes_hides_the_roster(self):
+        from backend import main
+        settings = self.settings()
+        settings["sources"]["hermes"]["enabled"] = False
+        with patch.object(external_agents, "load_settings", return_value=settings):
+            agents = main.read_agents()
+        self.assertEqual([a for a in agents if a.get("source") == "hermes"], [])
+
     def test_disabled_source_is_skipped(self):
         _write_claude_session(self.root / "claude", "-Users-x-Demo", "/Users/x/Demo", "hello")
         settings = self.settings()
         settings["sources"]["claude"]["enabled"] = False
         self.assertEqual(external_agents.read_external_agents(settings), [])
+
+    def test_sessions_become_task_board_cards(self):
+        session = _write_claude_session(self.root / "claude", "-Users-x-Demo", "/Users/x/Demo", "Fix the login bug")
+        cards = external_agents.read_external_tasks(self.settings())
+        self.assertEqual(len(cards), 1)
+        card = cards[0]
+        self.assertEqual(card["column"], "in_progress")
+        self.assertEqual(card["status"], "running")
+        self.assertEqual(card["title"], "Fix the login bug")
+        self.assertEqual(card["assignee"], "Claude Code")
+        self.assertEqual(card["progress_mode"], "active")
+        self.assertGreaterEqual(card["progress_value"], 12)
+
+        import os
+        hour_ago = time.time() - 3600
+        os.utime(session, (hour_ago, hour_ago))
+        card = external_agents.read_external_tasks(self.settings())[0]
+        self.assertEqual(card["column"], "completed")
+        self.assertEqual(card["status"], "done")
+        self.assertTrue(card["finished_at"])
+
+    def test_live_progress_advances_with_elapsed_time(self):
+        from datetime import datetime, timezone
+        from backend import main
+
+        def iso(seconds_ago):
+            return datetime.fromtimestamp(time.time() - seconds_ago, tz=timezone.utc).isoformat()
+
+        fresh = main._task_progress("running", iso(30))["progress_value"]
+        older = main._task_progress("running", iso(1800))["progress_value"]
+        oldest = main._task_progress("running", iso(24 * 3600))["progress_value"]
+        self.assertGreaterEqual(fresh, 46)
+        self.assertGreater(older, fresh)
+        self.assertGreaterEqual(oldest, older)
+        self.assertLess(oldest, 82)
+
+        session_fresh = external_agents._live_session_value(time.time() - 60, time.time())
+        session_old = external_agents._live_session_value(time.time() - 3600, time.time())
+        self.assertGreater(session_old, session_fresh)
+        self.assertLessEqual(session_old, 92)
 
     def test_settings_round_trip_keeps_only_known_keys(self):
         settings_file = self.root / "settings.json"

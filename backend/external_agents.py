@@ -10,6 +10,7 @@ The hub's own configuration is the one file this module writes, and it
 lives outside every tool's state directory.
 """
 import json
+import math
 import os
 import re
 import time
@@ -24,11 +25,14 @@ SETTINGS_PATH = Path(
     )
 ).expanduser()
 
+_HERMES_HOME_DEFAULT = Path(os.environ.get("HERMES_HOME", "~/.hermes")).expanduser()
+
 DEFAULT_SETTINGS: dict = {
     "external_activity_seconds": 120,
     "external_idle_hours": 6,
     "external_max_per_source": 3,
     "sources": {
+        "hermes": {"enabled": True, "home": str(_HERMES_HOME_DEFAULT), "label": "Hermes"},
         "claude": {"enabled": True, "home": str(Path.home() / ".claude"), "label": "Claude Code"},
         "codex": {"enabled": True, "home": str(Path.home() / ".codex"), "label": "Codex"},
         "openclaw": {"enabled": True, "home": str(Path.home() / ".openclaw"), "label": "OpenClaw"},
@@ -81,6 +85,21 @@ def _iso(ts: Optional[float]) -> Optional[str]:
     if ts:
         return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
     return None
+
+
+# Prompt/project extraction rereads multi-MB transcripts on every poll;
+# cache per file and invalidate on mtime change.
+_file_cache: dict[tuple[str, str], tuple[float, str]] = {}
+
+
+def _cached(kind: str, path: Path, mtime: float, compute) -> str:
+    key = (kind, str(path))
+    hit = _file_cache.get(key)
+    if hit and hit[0] == mtime:
+        return hit[1]
+    value = compute(path)
+    _file_cache[key] = (mtime, value)
+    return value
 
 
 def _tail_text(path: Path, size: int = 65536) -> str:
@@ -158,7 +177,25 @@ def _project_from_file(path: Path) -> str:
     return ""
 
 
+def _session_created(path: Path, mtime: float) -> float:
+    try:
+        stat = path.stat()
+        return getattr(stat, "st_birthtime", None) or stat.st_mtime
+    except OSError:
+        return mtime
+
+
+def _live_session_value(created: float, now: float) -> int:
+    """A moving bar for a live session: fills asymptotically with elapsed
+    time (20-minute scale) without ever claiming completion."""
+    elapsed = max(0.0, now - created)
+    return 12 + min(79, round(79 * (1 - math.exp(-elapsed / 1200))))
+
+
 def _session_files(source: str, home: Path) -> list[Path]:
+    if source == "hermes":
+        # For Hermes the meaningful count is the agent roster, not transcripts.
+        return list(home.glob("profiles/*/profile.yaml"))
     if source == "claude":
         return list(home.glob("projects/*/*.jsonl"))
     if source == "codex":
@@ -177,6 +214,60 @@ def source_counts(settings: Optional[dict] = None) -> dict[str, int]:
     return counts
 
 
+def read_external_tasks(settings: Optional[dict] = None) -> list[dict]:
+    """Task-board cards for external sessions: one card per transcript.
+
+    A session whose file is still changing is an in-progress card with the
+    live-activity bar; a session that has gone quiet moves to Completed.
+    """
+    settings = settings or load_settings()
+    now = time.time()
+    activity_window = settings["external_activity_seconds"]
+    idle_cutoff = now - settings["external_idle_hours"] * 3600
+
+    cards: list[dict] = []
+    for name, source in settings["sources"].items():
+        if name == "hermes" or not source.get("enabled"):
+            continue
+        home = Path(source["home"]).expanduser()
+        if not home.exists():
+            continue
+        label = source.get("label") or _SOURCE_META[name]["role"]
+        files = []
+        for path in _session_files(name, home):
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            if mtime >= idle_cutoff:
+                files.append((mtime, path))
+        files.sort(reverse=True)
+        for mtime, path in files[:12]:
+            working = now - mtime <= activity_window
+            project = _cached("project", path, mtime, _project_from_file) or path.parent.name
+            prompt = _cached("prompt", path, mtime, _last_user_text)
+            created = _session_created(path, mtime)
+            cards.append({
+                "id": f"external-{name}-{path.stem}",
+                "title": prompt[:160] or f"{label} session in {project}",
+                "assignee": label,
+                "priority": "0",
+                "status": "running" if working else "done",
+                "column": "in_progress" if working else "completed",
+                "detail": f"{label} session · {project}",
+                "project": project,
+                "workspace": "",
+                "result": "",
+                "failure": "",
+                "created_at": _iso(created),
+                "finished_at": None if working else _iso(mtime),
+                "progress_value": _live_session_value(created, now) if working else 100,
+                "progress_label": "Live session" if working else "Session ended",
+                "progress_mode": "active" if working else "workflow",
+            })
+    return cards
+
+
 def read_external_agents(settings: Optional[dict] = None) -> list[dict]:
     settings = settings or load_settings()
     now = time.time()
@@ -186,8 +277,8 @@ def read_external_agents(settings: Optional[dict] = None) -> list[dict]:
 
     agents: list[dict] = []
     for name, source in settings["sources"].items():
-        if not source.get("enabled"):
-            continue
+        if name == "hermes" or not source.get("enabled"):
+            continue  # the Hermes roster is built by main.read_agents
         home = Path(source["home"]).expanduser()
         if not home.exists():
             continue
@@ -206,13 +297,13 @@ def read_external_agents(settings: Optional[dict] = None) -> list[dict]:
         seen_projects: set[str] = set()
         label = source.get("label") or _SOURCE_META[name]["role"]
         for mtime, path in files:
-            project = _project_from_file(path) or path.parent.name
+            project = _cached("project", path, mtime, _project_from_file) or path.parent.name
             dedupe_key = path.parent.name if name == "claude" else project
             if dedupe_key in seen_projects:
                 continue
             seen_projects.add(dedupe_key)
             working = now - mtime <= activity_window
-            task = _last_user_text(path)
+            task = _cached("prompt", path, mtime, _last_user_text)
             agents.append({
                 "id": f"{name}-{project.lower()}",
                 "name": f"{label} · {project}" if project else label,
@@ -227,9 +318,9 @@ def read_external_agents(settings: Optional[dict] = None) -> list[dict]:
                 "last_activity_at": _iso(mtime),
                 "task_id": None,
                 "run_id": None,
-                "progress_value": None,
+                "progress_value": _live_session_value(_session_created(path, mtime), now) if working else None,
                 "progress_label": "Live session" if working else None,
-                "progress_mode": "activity" if working else None,
+                "progress_mode": "active" if working else None,
                 "position": {"top": 10, "left": 10},
             })
             if len(seen_projects) >= max_per_source:

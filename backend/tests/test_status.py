@@ -115,7 +115,9 @@ class LiveAgentStatusTests(unittest.TestCase):
         self.assertEqual((agents["Atlas"]["progress_value"], agents["Atlas"]["progress_label"]), (12, "Queued"))
         self.assertEqual(agents["Quinn"]["status"], "waiting")
         self.assertEqual(agents["Devin"]["status"], "working")
-        self.assertEqual((agents["Devin"]["progress_value"], agents["Devin"]["progress_mode"]), (46, "active"))
+        self.assertEqual(agents["Devin"]["progress_mode"], "active")
+        self.assertGreaterEqual(agents["Devin"]["progress_value"], 46)
+        self.assertLess(agents["Devin"]["progress_value"], 82)
         self.assertEqual(agents["Orion"]["status_reason"], "stale_heartbeat")
         self.assertEqual(agents["Scribe"]["status"], "error")
 
