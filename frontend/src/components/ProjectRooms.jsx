@@ -1,15 +1,25 @@
 import { useState } from 'react';
 import './ProjectRooms.css';
 
+const FILTER_STORAGE_KEY = 'hermes-project-rooms-filter';
+const FILTERS = ['all', 'active', 'attention', 'completed', 'archived'];
+
 function ProjectRooms({ rooms = [], selectedId, onSelect }) {
-  const [filter, setFilter] = useState('all');
+  const [filter, setFilter] = useState(() => {
+    const saved = window.localStorage.getItem(FILTER_STORAGE_KEY);
+    return FILTERS.includes(saved) ? saved : 'all';
+  });
+  const pickFilter = (status) => {
+    setFilter(status);
+    window.localStorage.setItem(FILTER_STORAGE_KEY, status);
+  };
   const visible = rooms.filter((room) => filter === 'all' || room.status === filter);
 
   return (
     <div className="project-rooms-view">
       <div className="project-room-filters">
-        {['all', 'active', 'attention', 'completed', 'archived'].map((status) => (
-          <button key={status} className={filter === status ? 'active' : ''} onClick={() => setFilter(status)}>{titleCase(status)}</button>
+        {FILTERS.map((status) => (
+          <button key={status} className={filter === status ? 'active' : ''} onClick={() => pickFilter(status)}>{titleCase(status)}</button>
         ))}
       </div>
       <div className="project-room-grid">
