@@ -130,7 +130,7 @@ function TaskStage({ task }) {
   const active = mode === 'active' || mode === 'activity';
   const indeterminate = task.progress_value == null;
   return <span className={`kanban-progress ${active ? (indeterminate ? 'activity' : 'active') : mode}`}>
-    <span><b>{task.progress_label}</b>{!indeterminate && <em>{task.progress_value}% workflow</em>}</span>
+    <span><b>{task.progress_label}</b>{!indeterminate && <em>{active ? `~${task.progress_value}% est.` : `${task.progress_value}% workflow`}</em>}</span>
     <i><i style={!indeterminate ? { width: `${task.progress_value}%` } : undefined} /></i>
   </span>;
 }

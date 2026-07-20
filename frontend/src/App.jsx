@@ -508,7 +508,7 @@ function TaskProgress({ item, compact = false }) {
   const indeterminate = item.progress_value == null;
   return (
     <span className={`task-progress ${compact ? 'compact' : ''} ${active ? (indeterminate ? 'activity' : 'active') : mode}`}>
-      <span className="task-progress-meta"><b>{item.progress_label}</b>{!compact && !indeterminate && <em>{item.progress_value}% workflow</em>}</span>
+      <span className="task-progress-meta"><b>{item.progress_label}</b>{!compact && !indeterminate && <em>{active ? `~${item.progress_value}% est.` : `${item.progress_value}% workflow`}</em>}</span>
       <span className="task-progress-track" role="progressbar" aria-label={`${item.progress_label} workflow stage`} aria-valuemin="0" aria-valuemax="100" {...(!indeterminate ? { 'aria-valuenow': item.progress_value } : {})}>
         <i style={!indeterminate ? { width: `${item.progress_value}%` } : undefined} />
       </span>

@@ -495,7 +495,7 @@ function AgentProgress({ agent, labelled = false }) {
   const indeterminate = agent.progress_value == null;
   const label = String(agent.progress_label || '');
   return <span className={`map-task-progress ${active ? (indeterminate ? 'activity' : 'active') : mode} ${labelled ? 'labelled' : ''}`} title={label}>
-    {labelled && <b>{label}{!indeterminate ? ` · ${agent.progress_value}% workflow` : ''}</b>}
+    {labelled && <b>{label}{!indeterminate ? (active ? ` · ~${agent.progress_value}% est.` : ` · ${agent.progress_value}% workflow`) : ''}</b>}
     <span role="progressbar" aria-label={`${agent.name}: ${label}`} aria-valuemin="0" aria-valuemax="100" {...(!indeterminate ? { 'aria-valuenow': Number(agent.progress_value) || 0 } : {})}>
       <i style={!indeterminate ? { width: `${agent.progress_value}%` } : undefined} />
     </span>
