@@ -8,14 +8,19 @@ from unittest.mock import patch
 from backend import external_agents
 
 
-def _write_claude_session(home: Path, project_dir: str, cwd: str, text: str) -> Path:
+def _write_claude_session(home: Path, project_dir: str, cwd: str, text: str, finished: bool = False) -> Path:
     sessions = home / "projects" / project_dir
     sessions.mkdir(parents=True)
     session = sessions / "abc123.jsonl"
+    last = (
+        {"role": "assistant", "content": [{"type": "text", "text": "All done."}]}
+        if finished else
+        {"role": "assistant", "content": [{"type": "tool_use", "name": "Bash", "input": {}}]}
+    )
     session.write_text("\n".join([
         json.dumps({"type": "mode", "mode": "normal"}),
         json.dumps({"type": "user", "cwd": cwd, "message": {"role": "user", "content": text}}),
-        json.dumps({"type": "assistant", "cwd": cwd, "message": {"role": "assistant", "content": "ok"}}),
+        json.dumps({"type": "assistant", "cwd": cwd, "message": last}),
     ]))
     return session
 
@@ -108,6 +113,16 @@ class ExternalAgentTests(unittest.TestCase):
         card = external_agents.read_external_tasks(self.settings())[0]
         self.assertEqual(card["column"], "completed")
         self.assertEqual(card["status"], "done")
+        self.assertTrue(card["finished_at"])
+
+    def test_finished_turn_moves_to_done_even_while_file_is_fresh(self):
+        _write_claude_session(self.root / "claude", "-Users-x-Demo", "/Users/x/Demo", "Ship it", finished=True)
+        agents = external_agents.read_external_agents(self.settings())
+        self.assertEqual(agents[0]["status"], "idle")
+        card = external_agents.read_external_tasks(self.settings())[0]
+        self.assertEqual(card["column"], "completed")
+        self.assertEqual(card["status"], "done")
+        self.assertEqual(card["progress_value"], 100)
         self.assertTrue(card["finished_at"])
 
     def test_live_progress_advances_with_elapsed_time(self):

@@ -163,6 +163,53 @@ def _head_text(path: Path, size: int = 16384) -> str:
         return ""
 
 
+def _session_finished(path: Path) -> str:
+    """"1" when the transcript's last turn has completed, "" while in flight.
+
+    Claude Code ends a turn with a plain assistant text message; Codex writes
+    an explicit task_complete event. Tool calls, tool results, thinking and a
+    fresh user prompt all mean the turn is still running.
+    """
+    for line in reversed(_tail_text(path, 32768).splitlines()):
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if record.get("type") == "event_msg":  # codex event stream
+            payload_type = (record.get("payload") or {}).get("type")
+            if payload_type == "task_complete":
+                return "1"
+            if payload_type in {"task_started", "user_message"}:
+                return ""
+            continue  # token_count and other bookkeeping
+        if record.get("type") == "response_item":
+            return ""  # codex mid-turn item
+        message = record.get("message")
+        if not isinstance(message, dict):
+            continue  # summaries, mode changes and other bookkeeping
+        if message.get("role") == "assistant":
+            content = message.get("content")
+            if isinstance(content, str):
+                return "1"
+            if isinstance(content, list):
+                types = {part.get("type") for part in content if isinstance(part, dict)}
+                if types & {"tool_use", "thinking"}:
+                    return ""
+                if "text" in types:
+                    return "1"
+            continue
+        if message.get("role") == "user":
+            return ""  # a prompt or tool result means work is in flight
+    return ""
+
+
+def _is_working(path: Path, mtime: float, now: float, activity_window: float) -> bool:
+    """Recently changed and the last recorded turn has not completed."""
+    if now - mtime > activity_window:
+        return False
+    return not _cached("finished", path, mtime, _session_finished)
+
+
 def _project_from_file(path: Path) -> str:
     """The working directory the session was launched in, from the file head."""
     for line in _head_text(path).splitlines():
@@ -242,10 +289,16 @@ def read_external_tasks(settings: Optional[dict] = None) -> list[dict]:
             if mtime >= idle_cutoff:
                 files.append((mtime, path))
         files.sort(reverse=True)
+        # Resuming a conversation writes a fresh transcript with the same
+        # history, so collapse files sharing a project and latest prompt.
+        seen: set[tuple[str, str]] = set()
         for mtime, path in files[:12]:
-            working = now - mtime <= activity_window
+            working = _is_working(path, mtime, now, activity_window)
             project = _cached("project", path, mtime, _project_from_file) or path.parent.name
             prompt = _cached("prompt", path, mtime, _last_user_text)
+            if (project, prompt) in seen:
+                continue
+            seen.add((project, prompt))
             created = _session_created(path, mtime)
             cards.append({
                 "id": f"external-{name}-{path.stem}",
@@ -302,7 +355,7 @@ def read_external_agents(settings: Optional[dict] = None) -> list[dict]:
             if dedupe_key in seen_projects:
                 continue
             seen_projects.add(dedupe_key)
-            working = now - mtime <= activity_window
+            working = _is_working(path, mtime, now, activity_window)
             task = _cached("prompt", path, mtime, _last_user_text)
             agents.append({
                 "id": f"{name}-{project.lower()}",
