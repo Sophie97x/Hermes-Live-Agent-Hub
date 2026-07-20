@@ -89,6 +89,17 @@ class ExternalAgentTests(unittest.TestCase):
             agents = main.read_agents()
         self.assertEqual([a for a in agents if a.get("source") == "hermes"], [])
 
+    def test_codex_subagent_threads_are_hidden(self):
+        day_dir = self.root / "codex" / "sessions" / "2026" / "07" / "20"
+        day_dir.mkdir(parents=True)
+        (day_dir / "rollout-2026-07-20T10-00-00-sub.jsonl").write_text(json.dumps({
+            "type": "session_meta",
+            "payload": {"id": "sub", "cwd": "/Users/x/Demo",
+                        "thread_source": "subagent", "source": {"subagent": {"other": "guardian"}}},
+        }))
+        self.assertEqual(external_agents.read_external_agents(self.settings()), [])
+        self.assertEqual(external_agents.read_external_tasks(self.settings()), [])
+
     def test_disabled_source_is_skipped(self):
         _write_claude_session(self.root / "claude", "-Users-x-Demo", "/Users/x/Demo", "hello")
         settings = self.settings()

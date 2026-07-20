@@ -210,18 +210,35 @@ def _is_working(path: Path, mtime: float, now: float, activity_window: float) ->
     return not _cached("finished", path, mtime, _session_finished)
 
 
-def _project_from_file(path: Path) -> str:
-    """The working directory the session was launched in, from the file head."""
+def _session_meta_json(path: Path) -> str:
+    """Launch cwd and whether this transcript is an internal subagent thread.
+
+    Codex spawns helper threads (judges, watchers) that write their own
+    rollout files; like Hermes transport sessions, they are not people and
+    should not appear in the office.
+    """
+    info = {"cwd": "", "subagent": False}
     for line in _head_text(path).splitlines():
         try:
             record = json.loads(line)
         except json.JSONDecodeError:
             continue
         payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+        if record.get("type") == "session_meta":
+            info["cwd"] = payload.get("cwd") or ""
+            source = payload.get("source")
+            if payload.get("thread_source") == "subagent" or (isinstance(source, dict) and source.get("subagent")):
+                info["subagent"] = True
+            break
         cwd = record.get("cwd") or payload.get("cwd")
         if isinstance(cwd, str) and cwd:
-            return Path(cwd).name
-    return ""
+            info["cwd"] = cwd
+            break
+    return json.dumps(info)
+
+
+def _session_meta(path: Path, mtime: float) -> dict:
+    return json.loads(_cached("meta", path, mtime, _session_meta_json))
 
 
 def _session_created(path: Path, mtime: float) -> float:
@@ -293,8 +310,11 @@ def read_external_tasks(settings: Optional[dict] = None) -> list[dict]:
         # history, so collapse files sharing a project and latest prompt.
         seen: set[tuple[str, str]] = set()
         for mtime, path in files[:12]:
+            meta = _session_meta(path, mtime)
+            if meta["subagent"]:
+                continue
             working = _is_working(path, mtime, now, activity_window)
-            project = _cached("project", path, mtime, _project_from_file) or path.parent.name
+            project = Path(meta["cwd"]).name if meta["cwd"] else (path.parent.name if name == "claude" else "")
             prompt = _cached("prompt", path, mtime, _last_user_text)
             if (project, prompt) in seen:
                 continue
@@ -302,12 +322,12 @@ def read_external_tasks(settings: Optional[dict] = None) -> list[dict]:
             created = _session_created(path, mtime)
             cards.append({
                 "id": f"external-{name}-{path.stem}",
-                "title": prompt[:160] or f"{label} session in {project}",
+                "title": prompt[:160] or (f"{label} session in {project}" if project else f"{label} session"),
                 "assignee": label,
                 "priority": "0",
                 "status": "running" if working else "done",
                 "column": "in_progress" if working else "completed",
-                "detail": f"{label} session · {project}",
+                "detail": f"{label} session · {project}" if project else f"{label} session",
                 "project": project,
                 "workspace": "",
                 "result": "",
@@ -350,7 +370,10 @@ def read_external_agents(settings: Optional[dict] = None) -> list[dict]:
         seen_projects: set[str] = set()
         label = source.get("label") or _SOURCE_META[name]["role"]
         for mtime, path in files:
-            project = _cached("project", path, mtime, _project_from_file) or path.parent.name
+            meta = _session_meta(path, mtime)
+            if meta["subagent"]:
+                continue
+            project = Path(meta["cwd"]).name if meta["cwd"] else (path.parent.name if name == "claude" else "")
             dedupe_key = path.parent.name if name == "claude" else project
             if dedupe_key in seen_projects:
                 continue
