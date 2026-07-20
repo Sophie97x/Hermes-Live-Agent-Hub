@@ -8,10 +8,10 @@ from unittest.mock import patch
 from backend import external_agents
 
 
-def _write_claude_session(home: Path, project_dir: str, cwd: str, text: str, finished: bool = False) -> Path:
+def _write_claude_session(home: Path, project_dir: str, cwd: str, text: str, finished: bool = False, session_name: str = "abc123") -> Path:
     sessions = home / "projects" / project_dir
-    sessions.mkdir(parents=True)
-    session = sessions / "abc123.jsonl"
+    sessions.mkdir(parents=True, exist_ok=True)
+    session = sessions / f"{session_name}.jsonl"
     last = (
         {"role": "assistant", "content": [{"type": "text", "text": "All done."}]}
         if finished else
@@ -125,6 +125,19 @@ class ExternalAgentTests(unittest.TestCase):
         self.assertEqual(card["column"], "completed")
         self.assertEqual(card["status"], "done")
         self.assertTrue(card["finished_at"])
+
+    def test_two_active_sessions_become_two_working_agents(self):
+        _write_claude_session(self.root / "claude", "-Users-x-Demo", "/Users/x/Demo", "Fix the login bug", session_name="s1")
+        _write_claude_session(self.root / "claude", "-Users-x-Demo", "/Users/x/Demo", "Write the docs", session_name="s2")
+        agents = external_agents.read_external_agents(self.settings())
+        self.assertEqual(len(agents), 2)
+        self.assertEqual({agent["status"] for agent in agents}, {"working"})
+        self.assertEqual({agent["current_task"] for agent in agents}, {"Fix the login bug", "Write the docs"})
+        self.assertEqual(len({agent["id"] for agent in agents}), 2)
+        self.assertEqual(
+            sorted(agent["name"] for agent in agents),
+            ["Claude Code · Demo (1)", "Claude Code · Demo (2)"],
+        )
 
     def test_finished_turn_moves_to_done_even_while_file_is_fresh(self):
         _write_claude_session(self.root / "claude", "-Users-x-Demo", "/Users/x/Demo", "Ship it", finished=True)

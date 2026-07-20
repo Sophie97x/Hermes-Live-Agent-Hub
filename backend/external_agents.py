@@ -365,23 +365,34 @@ def read_external_agents(settings: Optional[dict] = None) -> list[dict]:
                 files.append((mtime, path))
         files.sort(reverse=True)
 
-        # One agent per project/workspace, newest session wins. Claude keeps
-        # one directory per project, so that directory is the natural key.
+        # Every working session is its own agent (a resumed copy of the same
+        # conversation is folded away); idle history collapses to one agent
+        # per project so the Break Room does not fill with old sessions.
         seen_projects: set[str] = set()
+        seen_conversations: set[tuple[str, str]] = set()
+        added = 0
         label = source.get("label") or _SOURCE_META[name]["role"]
         for mtime, path in files:
+            if added >= max_per_source:
+                break
             meta = _session_meta(path, mtime)
             if meta["subagent"]:
                 continue
             project = Path(meta["cwd"]).name if meta["cwd"] else (path.parent.name if name == "claude" else "")
-            dedupe_key = path.parent.name if name == "claude" else project
-            if dedupe_key in seen_projects:
-                continue
-            seen_projects.add(dedupe_key)
+            project_key = path.parent.name if name == "claude" else project
             working = _is_working(path, mtime, now, activity_window)
             task = _cached("prompt", path, mtime, _last_user_text)
+            if working:
+                if (project_key, task) in seen_conversations:
+                    continue
+                seen_conversations.add((project_key, task))
+            else:
+                if project_key in seen_projects:
+                    continue
+            seen_projects.add(project_key)
+            added += 1
             agents.append({
-                "id": f"{name}-{project.lower()}",
+                "id": f"{name}-{path.stem.lower()}",
                 "name": f"{label} · {project}" if project else label,
                 "role": _SOURCE_META[name]["role"],
                 "specialty": _SOURCE_META[name]["specialty"],
@@ -399,6 +410,15 @@ def read_external_agents(settings: Optional[dict] = None) -> list[dict]:
                 "progress_mode": "active" if working else None,
                 "position": {"top": 10, "left": 10},
             })
-            if len(seen_projects) >= max_per_source:
-                break
+
+    # Two live sessions in one project share a name; number them so both
+    # characters stay tellable apart in the office and roster.
+    name_totals: dict[str, int] = {}
+    for agent in agents:
+        name_totals[agent["name"]] = name_totals.get(agent["name"], 0) + 1
+    name_seen: dict[str, int] = {}
+    for agent in agents:
+        if name_totals[agent["name"]] > 1:
+            name_seen[agent["name"]] = name_seen.get(agent["name"], 0) + 1
+            agent["name"] = f'{agent["name"]} ({name_seen[agent["name"]]})'
     return agents
