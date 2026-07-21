@@ -110,6 +110,26 @@
   box-shadow:0 0 9px color-mix(in srgb,var(--agent-glow),transparent 22%);
   backdrop-filter:blur(4px);
 }
+.map-person .level-badge{
+  position:absolute;
+  z-index:4;
+  top:11px;
+  left:-3px;
+  min-width:12px;
+  height:12px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  border-radius:50%;
+  border:1px solid #ffd66e;
+  background:#0a0e18e8;
+  color:#ffd66e;
+  font-size:7px;
+  font-style:normal;
+  font-weight:700;
+  box-shadow:0 0 9px #ffd66e55;
+  backdrop-filter:blur(4px);
+}
 .map-agent:hover .map-agent-art,.map-agent.selected .map-agent-art{filter:drop-shadow(0 0 2px #fff) drop-shadow(0 0 8px var(--agent-glow)) drop-shadow(0 6px 4px #02040be6)}
 .map-agent.working .map-person::before{opacity:.9;animation:agent-platform-pulse 1.8s ease-in-out var(--delay) infinite}
 .map-agent.waiting .map-person::before{--agent-glow:#edb25b;opacity:.78}
@@ -1052,3 +1072,89 @@
   font-size:7px;text-decoration:none;
 }
 .storey-marker.floor-toggle:hover .floor-switch-hint>i{background:#7de7ff3d;color:#c8f4ff}
+
+/* Active projects live in the small landing room at the bottom-right of the
+   floor, shown one board at a time. With more than two live projects the
+   board sits on a visible stack of cards, and the arrows page through them. */
+.project-dock{
+  position:absolute;
+  z-index:9;
+  left:91.2%;
+  top:76.2%;
+  display:grid;
+  justify-items:center;
+  align-content:start;
+  gap:5px;
+  width:150px;
+  transform:translateX(-50%);
+}
+.project-dock .meeting-project-board{
+  width:150px;
+  gap:3px;
+  padding:7px 9px;
+  border-radius:9px;
+  box-shadow:0 7px 16px #000c,0 0 12px #7164ce2e;
+}
+.project-dock .meeting-project-board>span{font-size:6.5px;letter-spacing:.12em}
+/* One line only: three boards must add up to a predictable height to fit the
+   room, so long project names ellipsize rather than wrapping. */
+.project-dock .meeting-project-board>strong{
+  display:block;
+  overflow:hidden;
+  /* The percentage sits on the label row above, so the title keeps the full
+     card width; only genuinely long names ellipsize. */
+  padding-right:4px;
+  font-size:11px;
+  line-height:1.2;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.project-dock .meeting-project-board>small{font-size:7.5px}
+.project-dock .meeting-project-board>i{height:5px;margin-top:2px}
+.project-dock .meeting-project-board>em{right:8px;top:6px;font-size:9.5px}
+/* When more projects exist than the room shows, the last visible board sits on
+   stacked card edges to hint at the ones behind. Drawn as hard-edged offset
+   box-shadows (fill, then a 1px-wider rim behind it) rather than pseudo-
+   elements, which the card's backdrop-filter stacking context hides. */
+.project-dock.stacked .meeting-project-board:last-of-type{
+  box-shadow:
+    0 4px 0 -2px #0f1219f5,
+    0 4px 0 -1px #8d7ef055,
+    0 8px 0 -4px #0f1219ee,
+    0 8px 0 -3px #8d7ef041,
+    0 10px 18px #000c;
+}
+.project-dock-nav{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  padding:3px 5px;
+  border:1px solid #ffffff26;
+  border-radius:8px;
+  background:#0c0f16e8;
+  box-shadow:0 4px 12px #0009;
+  backdrop-filter:blur(6px);
+}
+.project-dock-nav button{
+  display:grid;
+  place-items:center;
+  width:15px;
+  height:15px;
+  padding:0;
+  border:0;
+  border-radius:5px;
+  background:#ffffff14;
+  color:#e7e3f2;
+  font-size:12px;
+  line-height:1;
+  cursor:pointer;
+  transition:background .18s ease,color .18s ease;
+}
+.project-dock-nav button:hover{background:#8d79ee;color:#fff}
+.project-dock-nav>span{
+  min-width:22px;
+  color:#cfc9dd;
+  font-size:8px;
+  font-weight:800;
+  text-align:center;
+}

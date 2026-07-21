@@ -979,6 +979,11 @@ async def get_health():
     return read_health()
 
 
+@app.get("/api/usage")
+async def get_usage():
+    return external_agents.read_external_usage()
+
+
 @app.get("/api/settings")
 async def get_settings():
     settings = external_agents.load_settings()

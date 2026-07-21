@@ -30,6 +30,9 @@ const DOOR_OPEN_MS = 600;
 const DOOR_GATE_RADIUS = 2.4;
 const DOOR_APPROACH_RADIUS = 3.8;
 
+// How many project boards the bottom-right landing room holds at once.
+const PROJECT_DOCK_CAPACITY = 3;
+
 // Cartoon scuffle: two walking agents whose paths cross close enough get
 // pulled into a 5-second dust-cloud brawl before continuing on their way.
 const FIGHT_TRIGGER_DISTANCE = 5.5;
@@ -490,6 +493,7 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [],
   const [stageScale, setStageScale] = useState(1);
   const [wanderSeats, setWanderSeats] = useState({});
   const wanderStateRef = useRef([]);
+  const [projectIndex, setProjectIndex] = useState(0);
   const [fights, setFights] = useState([]);
   const fightsRef = useRef([]);
   const fightingIdsRef = useRef(new Set());
@@ -1022,7 +1026,15 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [],
     .map((room) => ({ ...room, meetingMatches: room.tasks?.filter((task) => meetingTaskIds.has(task.id)).length || 0 }))
     .filter((room) => room.status === 'active')
     .sort((left, right) => right.meetingMatches - left.meetingMatches || String(right.updated_at || '').localeCompare(String(left.updated_at || '')))
-    .slice(0, 3);
+    .slice(0, 9);
+  // The landing room fits three boards; any more page through in the dock.
+  const projectCount = featuredProjects.length;
+  const projectPages = Math.max(1, Math.ceil(projectCount / PROJECT_DOCK_CAPACITY));
+  const projectPage = projectIndex % projectPages;
+  const shownProjects = featuredProjects.slice(
+    projectPage * PROJECT_DOCK_CAPACITY,
+    projectPage * PROJECT_DOCK_CAPACITY + PROJECT_DOCK_CAPACITY,
+  );
 
   const resetView = () => {
     setStatusFilter('all');
@@ -1162,15 +1174,38 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [],
           </button>
         ))}
 
-        {featuredProjects.length > 0 && <div className={`meeting-project-stack ${featuredProjects.length === 1 ? 'single' : 'multiple'}`}>
-          {featuredProjects.map((project) => <button className="meeting-project-board" key={project.id} onClick={() => onSelectProject?.(project)} aria-label={`Open ${projectName(project)} project`}>
-            <span>ACTIVE PROJECT</span>
-            <strong>{projectName(project)}</strong>
-            <small>{project.tasks.filter((task) => task.status === 'done').length} of {project.tasks.length} tasks complete</small>
-            <i><i style={{ width: `${project.progress}%` }} /></i>
-            <em>{project.progress}%</em>
-          </button>)}
-        </div>}
+        {floorView === 'ground' && shownProjects.length > 0 && (
+          <div className={`project-dock ${projectPages > 1 ? 'stacked' : ''}`}>
+            {shownProjects.map((project) => (
+              <button
+                className="meeting-project-board"
+                key={project.id}
+                onClick={() => onSelectProject?.(project)}
+                title={`${projectName(project)} · ${project.progress}% complete`}
+                aria-label={`Open ${projectName(project)} project`}
+              >
+                <span>ACTIVE PROJECT</span>
+                <strong>{projectName(project)}</strong>
+                <small>{project.tasks.filter((task) => task.status === 'done').length} of {project.tasks.length} tasks complete</small>
+                <i><i style={{ width: `${project.progress}%` }} /></i>
+                <em>{project.progress}%</em>
+              </button>
+            ))}
+            {projectPages > 1 && (
+              <div className="project-dock-nav">
+                <button
+                  onClick={() => setProjectIndex((value) => (value + projectPages - 1) % projectPages)}
+                  aria-label="Previous active projects"
+                >‹</button>
+                <span>{projectPage + 1}/{projectPages}</span>
+                <button
+                  onClick={() => setProjectIndex((value) => (value + 1) % projectPages)}
+                  aria-label="Next active projects"
+                >›</button>
+              </div>
+            )}
+          </div>
+        )}
 
         {floorFights.map((fight) => (
           <FightCloud key={fight.id} fight={fight} />
@@ -1227,6 +1262,7 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [],
                   </span>}
                 </> : <img className="map-agent-art" src={seated ? art.seatedSrc : art.src} alt="" draggable="false" />}
                 <i className="role-badge">{roleIcon(agent)}</i>
+                {agent.level >= 2 && <i className="level-badge" title={`Level ${agent.level} · ${agent.xp} tasks completed`}>{agent.level}</i>}
               </span>
             </button>
             <span className="agent-nameplate"><b>{agent.name.length > 14 ? `${agent.name.slice(0, 12)}…` : agent.name}</b><small aria-label={agent.status} title={agent.status} /></span>

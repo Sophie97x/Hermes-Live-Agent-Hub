@@ -13,6 +13,7 @@ import json
 import math
 import os
 import re
+import shlex
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -269,6 +270,122 @@ def _subagent_meta(path: Path) -> dict:
     }
 
 
+# Published USD per million tokens (input, output, cache read), matched by
+# family substring in the model id. Unknown models report tokens without cost.
+_PRICING = {
+    "opus": (15.0, 75.0, 1.5),
+    "sonnet": (3.0, 15.0, 0.3),
+    "haiku": (0.8, 4.0, 0.08),
+}
+
+# Transcripts are append-only, so usage is accumulated incrementally: each
+# poll reads only the bytes written since the previous complete line.
+_usage_cache: dict[str, dict] = {}
+
+
+def _blank_usage() -> dict:
+    return {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "model": "", "cost": 0.0, "priced": False}
+
+
+def _pricing_rates(model: str) -> Optional[tuple]:
+    model = (model or "").lower()
+    for family, rates in _PRICING.items():
+        if family in model:
+            return rates
+    return None
+
+
+def _session_usage(path: Path, mtime: float) -> dict:
+    """Cumulative token usage for one transcript.
+
+    Claude Code writes per-message usage on assistant records; Codex writes
+    cumulative token_count events, where the latest one wins.
+    """
+    key = str(path)
+    entry = _usage_cache.get(key)
+    if entry and entry["mtime"] == mtime:
+        return entry["totals"]
+    offset = entry["offset"] if entry else 0
+    totals = dict(entry["totals"]) if entry else _blank_usage()
+    try:
+        if path.stat().st_size < offset:  # rotated or truncated: start over
+            offset, totals = 0, _blank_usage()
+        with path.open("rb") as handle:
+            handle.seek(offset)
+            chunk = handle.read()
+    except OSError:
+        return totals
+    end = chunk.rfind(b"\n")
+    if end >= 0:
+        for line in chunk[:end].splitlines():
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+            if payload.get("type") == "token_count":
+                cumulative = (payload.get("info") or {}).get("total_token_usage")
+                if isinstance(cumulative, dict):
+                    totals["input_tokens"] = cumulative.get("input_tokens") or 0
+                    totals["output_tokens"] = cumulative.get("output_tokens") or 0
+                    totals["cache_read_tokens"] = cumulative.get("cached_input_tokens") or 0
+                continue
+            message = record.get("message")
+            if not isinstance(message, dict):
+                continue
+            if isinstance(message.get("model"), str) and message["model"]:
+                totals["model"] = message["model"]
+            usage = message.get("usage")
+            if isinstance(usage, dict):
+                input_step = (usage.get("input_tokens") or 0) + (usage.get("cache_creation_input_tokens") or 0)
+                output_step = usage.get("output_tokens") or 0
+                cache_step = usage.get("cache_read_input_tokens") or 0
+                totals["input_tokens"] += input_step
+                totals["output_tokens"] += output_step
+                totals["cache_read_tokens"] += cache_step
+                # Cost is priced per message at that message's own model, so
+                # sessions that switch models mid-way stay billed correctly.
+                rates = _pricing_rates(totals["model"])
+                if rates:
+                    totals["cost"] += input_step / 1e6 * rates[0] + output_step / 1e6 * rates[1] + cache_step / 1e6 * rates[2]
+                    totals["priced"] = True
+        offset += end + 1
+    _usage_cache[key] = {"mtime": mtime, "offset": offset, "totals": totals}
+    return totals
+
+
+def _usage_payload(path: Path, mtime: float) -> Optional[dict]:
+    totals = _session_usage(path, mtime)
+    total = totals["input_tokens"] + totals["output_tokens"] + totals["cache_read_tokens"]
+    if not total:
+        return None
+    return {
+        "input_tokens": totals["input_tokens"],
+        "output_tokens": totals["output_tokens"],
+        "cache_read_tokens": totals["cache_read_tokens"],
+        "model": totals["model"],
+        "total_tokens": total,
+        "est_cost": round(totals["cost"], 4) if totals["priced"] else None,
+    }
+
+
+_UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
+def _resume_command(source: str, path: Path, cwd: str) -> str:
+    """Shell command that reopens this session in its own CLI, or ""."""
+    if source == "claude":
+        command = f"claude --resume {path.stem}"
+    elif source == "codex":
+        match = _UUID_RE.search(path.stem)
+        if not match:
+            return ""
+        command = f"codex resume {match.group(0)}"
+    else:
+        return ""
+    return f"cd {shlex.quote(cwd)} && {command}" if cwd else command
+
+
 def _session_created(path: Path, mtime: float) -> float:
     try:
         stat = path.stat()
@@ -461,6 +578,9 @@ def read_external_agents(settings: Optional[dict] = None) -> list[dict]:
                     "last_activity_at": _iso(mtime),
                     "task_id": None,
                     "run_id": None,
+                    "cwd": meta["cwd"] or "",
+                    "resume_command": "",
+                    "usage": _usage_payload(path, mtime),
                     "progress_value": _live_session_value(_session_created(path, mtime), now),
                     "progress_label": "Live subagent",
                     "progress_mode": "active",
@@ -495,6 +615,9 @@ def read_external_agents(settings: Optional[dict] = None) -> list[dict]:
                 "last_activity_at": _iso(mtime),
                 "task_id": None,
                 "run_id": None,
+                "cwd": meta["cwd"] or "",
+                "resume_command": _resume_command(name, path, meta["cwd"]),
+                "usage": _usage_payload(path, mtime),
                 "progress_value": _live_session_value(_session_created(path, mtime), now) if working else None,
                 "progress_label": "Live session" if working else None,
                 "progress_mode": "active" if working else None,
@@ -512,6 +635,76 @@ def read_external_agents(settings: Optional[dict] = None) -> list[dict]:
             name_seen[agent["name"]] = name_seen.get(agent["name"], 0) + 1
             agent["name"] = f'{agent["name"]} ({name_seen[agent["name"]]})'
     return agents
+
+
+def read_external_usage(settings: Optional[dict] = None) -> dict:
+    """Token and estimated-cost rollup per source over the idle window.
+
+    Hermes state stores no token counts, so only external transcripts are
+    counted; cost stays None when no session names a priced model.
+    """
+    settings = settings or load_settings()
+    now = time.time()
+    idle_cutoff = now - settings["external_idle_hours"] * 3600
+    sources = []
+    combined = {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "total_tokens": 0, "est_cost": 0.0, "sessions": 0}
+    combined_priced = False
+    for name, source in settings["sources"].items():
+        if name == "hermes" or not source.get("enabled"):
+            continue
+        home = Path(source["home"]).expanduser()
+        if not home.exists():
+            continue
+        row = {
+            "source": name,
+            "label": source.get("label") or _SOURCE_META[name]["role"],
+            "input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0,
+            "total_tokens": 0, "est_cost": 0.0, "sessions": 0,
+        }
+        row_priced = False
+        files = []
+        for path in _session_files(name, home):
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            if mtime >= idle_cutoff:
+                files.append((mtime, path))
+        files.sort(reverse=True)
+        # Resuming a conversation writes a fresh transcript carrying the whole
+        # history, so count only the newest file per project + latest prompt —
+        # the same collapse read_external_agents applies to the roster.
+        seen_conversations: set[tuple[str, str]] = set()
+        for mtime, path in files[:20]:
+            meta = _session_meta(path, mtime)
+            project_key = path.parent.name if name == "claude" else (Path(meta["cwd"]).name if meta["cwd"] else "")
+            prompt = _cached("prompt", path, mtime, _last_user_text)
+            if (project_key, prompt) in seen_conversations:
+                continue
+            seen_conversations.add((project_key, prompt))
+            totals = _session_usage(path, mtime)
+            session_total = totals["input_tokens"] + totals["output_tokens"] + totals["cache_read_tokens"]
+            if not session_total:
+                continue
+            row["sessions"] += 1
+            row["input_tokens"] += totals["input_tokens"]
+            row["output_tokens"] += totals["output_tokens"]
+            row["cache_read_tokens"] += totals["cache_read_tokens"]
+            row["total_tokens"] += session_total
+            if totals["priced"]:
+                row["est_cost"] += totals["cost"]
+                row_priced = True
+        if not row["sessions"]:
+            continue
+        for key in ("input_tokens", "output_tokens", "cache_read_tokens", "total_tokens", "sessions"):
+            combined[key] += row[key]
+        if row_priced:
+            combined["est_cost"] += row["est_cost"]
+            combined_priced = True
+        row["est_cost"] = round(row["est_cost"], 2) if row_priced else None
+        sources.append(row)
+    combined["est_cost"] = round(combined["est_cost"], 2) if combined_priced else None
+    return {"sources": sources, "totals": combined, "window_hours": settings["external_idle_hours"]}
 
 
 def read_external_project_rooms(settings: Optional[dict] = None) -> list[dict]:

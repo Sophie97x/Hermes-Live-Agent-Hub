@@ -266,3 +266,24 @@
 .drawer-avatar.agent-avatar-art{width:104px;height:122px;margin-bottom:24px;border-radius:24px;background-color:#111722}
 .drawer-avatar.agent-avatar-art img{bottom:0;width:88%;height:auto;transform:translateX(-50%) scale(1.08);transform-origin:50% 100%}
 :root[data-theme="light"] .agent-avatar-art{background-color:#eef2f8;box-shadow:inset 0 0 0 1px #fff8,0 8px 20px #52607b24,0 0 18px color-mix(in srgb,var(--agent-art-accent),transparent 84%)}
+
+/* Token usage rollup inside the health popover */
+.health-usage{display:grid;gap:6px;margin:0 0 14px;padding:11px;border:1px solid #2b313e;border-radius:10px;background:#181d27}
+.health-usage header{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+.health-usage header small{color:#8d95a4;font-size:10px}
+.health-usage header strong{font-size:14px}
+.health-usage>span{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+.health-usage>span small{color:#8d95a4;font-size:11px}
+.health-usage>span em{font-style:normal;font-size:12px;color:#d8dbe3}
+:root[data-theme="light"] .health-usage{border-color:#e6e3ef;background:#f8f7fc}
+:root[data-theme="light"] .health-usage header small,:root[data-theme="light"] .health-usage>span small{color:#726d87}
+:root[data-theme="light"] .health-usage>span em{color:#3c3654}
+
+/* Resume-in-terminal block in the agent drawer */
+.resume-detail{gap:8px}
+.resume-command{display:block;padding:9px 11px;border:1px solid #2b303d;border-radius:9px;background:#10131b;color:#c9c3ff;font:12px/1.5 ui-monospace,monospace;word-break:break-all;user-select:all}
+.resume-copy{justify-self:start;padding:7px 12px;border:1px solid #4b456d;border-radius:9px;background:#24243a;color:#c9c3ff;font-size:12px;cursor:pointer}
+.resume-copy:hover{border-color:#8173ec;background:#2b2b45}
+:root[data-theme="light"] .resume-command{border-color:#e6e3ef;background:#f4f2fa;color:#4e43ac}
+:root[data-theme="light"] .resume-copy{border-color:#cfc9e8;background:#efedf8;color:#4e43ac}
+:root[data-theme="light"] .resume-copy:hover{border-color:#8b7bf0;background:#e6e2f6}

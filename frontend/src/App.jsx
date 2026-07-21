@@ -60,6 +60,28 @@ function formatUptime(seconds = 0) {
   return `${hours}h ${minutes}m`;
 }
 
+function formatTokens(count = 0) {
+  if (count >= 1e6) return `${(count / 1e6).toFixed(1)}M`;
+  if (count >= 1e3) return `${(count / 1e3).toFixed(1)}k`;
+  return String(count);
+}
+
+function formatCost(value) {
+  return value == null ? '' : ` · ~$${value.toFixed(2)}`;
+}
+
+// XP comes from completed task history; levels use widening thresholds so
+// early levels feel quick and later ones take real work.
+const LEVEL_THRESHOLDS = [0, 3, 8, 15, 25, 40];
+
+function levelFor(xp) {
+  let level = 1;
+  LEVEL_THRESHOLDS.forEach((minimum, index) => {
+    if (xp >= minimum) level = index + 1;
+  });
+  return level;
+}
+
 function App() {
   const [agents, setAgents] = useState([]);
   const [kanban, setKanban] = useState({});
@@ -74,6 +96,7 @@ function App() {
   const [selectedProject, setSelectedProject] = useState(null);
   const [agentFilter, setAgentFilter] = useState('all');
   const [health, setHealth] = useState({ uptime_seconds: 0, alerts: [], stuck_jobs: [] });
+  const [usage, setUsage] = useState(null);
   const [showHealth, setShowHealth] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [toast, setToast] = useState(null);
@@ -83,6 +106,7 @@ function App() {
   const [desktopAlerts, setDesktopAlerts] = useState(() => window.localStorage.getItem('hermes-desktop-alerts') === 'on');
   const [uiTheme, setUiTheme] = useState(() => window.localStorage.getItem('hermes-ui-theme') === 'light' ? 'light' : 'dark');
   const knownAlerts = useRef(new Set());
+  const agentsRef = useRef([]);
   const alertsReady = useRef(false);
   const knownTimeline = useRef(new Set());
   const timelineReady = useRef(false);
@@ -119,9 +143,10 @@ function App() {
           fetch(`${API}/api/project-rooms`),
           fetch(`${API}/api/timeline`),
           fetch(`${API}/api/conversations`),
+          fetch(`${API}/api/usage`),
         ]);
         if (!responses[0].ok) throw new Error('Core API unavailable');
-        const [nextAgents, nextKanban, nextCron, nextHealth, nextRooms, nextTimeline, nextConversations] = await Promise.all(
+        const [nextAgents, nextKanban, nextCron, nextHealth, nextRooms, nextTimeline, nextConversations, nextUsage] = await Promise.all(
           responses.map((response) => response.ok ? response.json() : null),
         );
         if (!mounted) return;
@@ -132,6 +157,7 @@ function App() {
         if (nextRooms) setProjectRooms(nextRooms);
         if (nextTimeline) setTimeline(nextTimeline);
         if (nextConversations) setConversations(nextConversations);
+        if (nextUsage) setUsage(nextUsage);
         markOnline();
         setLastUpdate(new Date());
       } catch {
@@ -244,7 +270,13 @@ function App() {
     if (alertsReady.current && newAlert) {
       setToast(newAlert);
       window.setTimeout(() => setToast(null), 6000);
-      if (desktopAlerts && window.Notification?.permission === 'granted') new window.Notification(newAlert.title, { body: newAlert.detail, tag: `hermes-${newAlert.id}` });
+      if (desktopAlerts && window.Notification?.permission === 'granted') {
+        const notification = new window.Notification(newAlert.title, { body: newAlert.detail, tag: `hermes-${newAlert.id}` });
+        notification.onclick = () => {
+          window.focus();
+          setShowHealth(true);
+        };
+      }
     }
     knownAlerts.current = nextIds;
     alertsReady.current = true;
@@ -255,7 +287,15 @@ function App() {
     const important = timeline.find((event) => !knownTimeline.current.has(event.id) && ['completed', 'blocked', 'failed', 'crashed', 'timed_out', 'review'].includes(event.kind));
     if (timelineReady.current && important) {
       const title = important.kind === 'completed' ? 'Task completed' : 'Hermes task needs attention';
-      if (desktopAlerts && window.Notification?.permission === 'granted') new window.Notification(title, { body: `${important.agent}: ${important.task_title}`, tag: `hermes-${important.id}` });
+      if (desktopAlerts && window.Notification?.permission === 'granted') {
+        const notification = new window.Notification(title, { body: `${important.agent}: ${important.task_title}`, tag: `hermes-${important.id}` });
+        notification.onclick = () => {
+          window.focus();
+          const match = agentsRef.current.find((agent) => agent.name.toLowerCase() === String(important.agent || '').toLowerCase());
+          if (match) setSelectedAgent(match);
+          else setView('timeline');
+        };
+      }
     }
     knownTimeline.current = nextIds;
     timelineReady.current = true;
@@ -286,6 +326,30 @@ function App() {
     }
   };
 
+  // Decorate every agent with XP and level derived from finished task history.
+  // External agents match by name prefix ("Claude Code · repo" → "Claude Code").
+  const roster = useMemo(() => {
+    const completedByAssignee = {};
+    ['completed', 'archive'].forEach((column) => {
+      (kanban[column] || []).forEach((task) => {
+        const key = String(task.assignee || '').toLowerCase();
+        if (key) completedByAssignee[key] = (completedByAssignee[key] || 0) + 1;
+      });
+    });
+    return agents.map((agent) => {
+      const name = agent.name.toLowerCase();
+      const prefix = name.split(' · ')[0];
+      const xp = completedByAssignee[name] ?? completedByAssignee[prefix] ?? 0;
+      return { ...agent, xp, level: levelFor(xp) };
+    });
+  }, [agents, kanban]);
+
+  // Notification click handlers look agents up outside React's render cycle,
+  // so they need the decorated roster, not the raw fetch payload.
+  useEffect(() => {
+    agentsRef.current = roster;
+  }, [roster]);
+
   const activeCount = agents.filter((agent) => agent.status === 'working').length;
   const attentionCount = agents.filter((agent) => ['waiting', 'error'].includes(agent.status)).length;
   const taskCount = useMemo(
@@ -309,7 +373,7 @@ function App() {
     (kanban.in_progress || []).forEach((task) => bump(task.assignee, 'active'));
     return Object.values(byAgent).sort((a, b) => (b.completed + b.active) - (a.completed + a.active));
   }, [kanban]);
-  const filteredAgents = agents.filter((agent) => (
+  const filteredAgents = roster.filter((agent) => (
     agentFilter === 'all'
     || (agentFilter === 'attention' && ['waiting', 'error'].includes(agent.status))
     || agent.status === agentFilter
@@ -371,6 +435,14 @@ function App() {
             <aside className="health-popover">
               <header><div><strong>System health</strong><small>{health.status === 'healthy' ? 'Everything looks good' : `${health.alerts.length} item${health.alerts.length === 1 ? '' : 's'} need attention`}</small></div><button onClick={() => setShowHealth(false)} aria-label="Close system health">×</button></header>
               <div className="health-metrics"><span><small>Hub uptime</small><strong>{formatUptime(health.uptime_seconds)}</strong></span><span><small>Stuck jobs</small><strong>{health.stuck_jobs?.length || 0}</strong></span></div>
+              {!!usage?.totals?.sessions && (
+                <div className="health-usage">
+                  <header><small>Tokens · last {usage.window_hours}h of external sessions</small><strong>{formatTokens(usage.totals.total_tokens)}{formatCost(usage.totals.est_cost)}</strong></header>
+                  {usage.sources.map((row) => (
+                    <span key={row.source}><small>{row.label} · {row.sessions} session{row.sessions === 1 ? '' : 's'}</small><em>{formatTokens(row.total_tokens)}{formatCost(row.est_cost)}</em></span>
+                  ))}
+                </div>
+              )}
               <div className="health-alerts">
                 {health.alerts?.length ? health.alerts.map((alert) => <div className={`health-alert ${alert.level}`} key={alert.id}><span>!</span><p><strong>{alert.title}</strong><small>{alert.detail.replaceAll('_', ' ')}</small></p></div>) : <p className="health-clear">✓ No failures or stuck jobs</p>}
               </div>
@@ -405,7 +477,7 @@ function App() {
 
         {view === 'office' && (
           <div className="office-page">
-            <OfficeFloor agents={agents} onSelectAgent={setSelectedAgent} selectedAgent={selectedAgent} timeline={timeline} projectRooms={projectRooms} onSelectProject={setSelectedProject} kanban={kanban} />
+            <OfficeFloor agents={roster} onSelectAgent={setSelectedAgent} selectedAgent={selectedAgent} timeline={timeline} projectRooms={projectRooms} onSelectProject={setSelectedProject} kanban={kanban} />
           </div>
         )}
 
@@ -451,12 +523,28 @@ function App() {
             {selectedAgent.progress_label && <div className="drawer-detail"><small>Task progress</small><TaskProgress item={selectedAgent} /></div>}
             <div className="drawer-detail"><small>Started</small><strong>{formatTimestamp(selectedAgent.started_at)}</strong></div>
             <div className="drawer-detail"><small>Last activity</small><strong>{formatTimestamp(selectedAgent.last_activity_at)}</strong></div>
+            {selectedAgent.level != null && <div className="drawer-detail"><small>Experience</small><strong>Level {selectedAgent.level} · {selectedAgent.xp} task{selectedAgent.xp === 1 ? '' : 's'} completed</strong></div>}
+            {!!selectedAgent.usage?.total_tokens && <div className="drawer-detail"><small>Session tokens</small><strong>{formatTokens(selectedAgent.usage.total_tokens)}{formatCost(selectedAgent.usage.est_cost)}{selectedAgent.usage.model ? ` · ${selectedAgent.usage.model}` : ''}</strong></div>}
+            {selectedAgent.resume_command && (
+              <div className="drawer-detail resume-detail">
+                <small>Resume in terminal</small>
+                <code className="resume-command">{selectedAgent.resume_command}</code>
+                <button
+                  className="resume-copy"
+                  onClick={() => {
+                    navigator.clipboard?.writeText(selectedAgent.resume_command)
+                      .then(() => { setToast({ title: 'Command copied', detail: 'Paste it in a terminal to pick the session back up.' }); window.setTimeout(() => setToast(null), 3000); })
+                      .catch(() => { setToast({ title: 'Copy failed', detail: 'Select the command text and copy it manually.' }); window.setTimeout(() => setToast(null), 4000); });
+                  }}
+                >⧉ Copy command</button>
+              </div>
+            )}
             <div className="agent-conversation"><header><small>Recent conversation</small><span>{conversations[selectedAgent.name.toLowerCase()]?.length || 0} messages</span></header>{conversations[selectedAgent.name.toLowerCase()]?.length ? conversations[selectedAgent.name.toLowerCase()].slice(-8).map((message) => <article key={message.id} className={`message-${message.role}`}><strong>{message.role === 'assistant' ? message.speaker || selectedAgent.name : message.role === 'user' ? 'You' : message.tool_name || message.role}</strong><p>{message.content || (message.tool_name ? `Used ${message.tool_name}` : 'No text content')}</p><time>{formatTimestamp(message.timestamp)}</time></article>) : <p className="conversation-empty">No linked conversation history yet.</p>}</div>
           </aside>
         </button>
       )}
       <ProjectRoomDrawer room={selectedProject} onClose={() => setSelectedProject(null)} />
-      <CommandPalette open={commandOpen} onClose={() => setCommandOpen(false)} agents={agents} rooms={projectRooms} tasks={allTasks} onCommand={runCommand} />
+      <CommandPalette open={commandOpen} onClose={() => setCommandOpen(false)} agents={roster} rooms={projectRooms} tasks={allTasks} onCommand={runCommand} />
       {toast && <button className="failure-toast" onClick={() => { setToast(null); setShowHealth(true); }}><span>!</span><p><strong>{toast.title}</strong><small>{toast.detail}</small></p></button>}
     </div>
   );

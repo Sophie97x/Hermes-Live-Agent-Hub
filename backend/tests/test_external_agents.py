@@ -301,6 +301,138 @@ class ClaudeSubagentLayoutTests(unittest.TestCase):
         self.assertEqual(external_agents.read_external_tasks(self.settings()), [])
 
 
+class UsageAndResumeTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.addCleanup(self.temp_dir.cleanup)
+
+    def settings(self):
+        settings = json.loads(json.dumps(external_agents.DEFAULT_SETTINGS))
+        for name, source in settings["sources"].items():
+            source["home"] = str(self.root / name)
+        return settings
+
+    def _write_claude_usage_session(self, session_name="a1b2c3", prompt="Fix the login bug"):
+        sessions = self.root / "claude" / "projects" / "-Users-x-Demo"
+        sessions.mkdir(parents=True, exist_ok=True)
+        session = sessions / f"{session_name}.jsonl"
+        usage = {"input_tokens": 100, "output_tokens": 50,
+                 "cache_read_input_tokens": 1000, "cache_creation_input_tokens": 20}
+        session.write_text("\n".join([
+            json.dumps({"type": "user", "cwd": "/Users/x/Demo",
+                        "message": {"role": "user", "content": prompt}}),
+            json.dumps({"type": "assistant", "cwd": "/Users/x/Demo",
+                        "message": {"role": "assistant", "model": "claude-sonnet-5",
+                                    "usage": usage,
+                                    "content": [{"type": "tool_use", "name": "Bash", "input": {}}]}}),
+        ]) + "\n")
+        return session
+
+    def test_claude_usage_totals_model_and_cost(self):
+        self._write_claude_usage_session()
+        agent = external_agents.read_external_agents(self.settings())[0]
+        usage = agent["usage"]
+        self.assertEqual(usage["input_tokens"], 120)  # includes cache creation
+        self.assertEqual(usage["output_tokens"], 50)
+        self.assertEqual(usage["cache_read_tokens"], 1000)
+        self.assertEqual(usage["total_tokens"], 1170)
+        self.assertEqual(usage["model"], "claude-sonnet-5")
+        self.assertAlmostEqual(usage["est_cost"], 0.0014, places=4)
+
+    def test_claude_resume_command_includes_cwd_and_session(self):
+        self._write_claude_usage_session(session_name="s1")
+        agent = external_agents.read_external_agents(self.settings())[0]
+        self.assertEqual(agent["resume_command"], "cd /Users/x/Demo && claude --resume s1")
+        self.assertEqual(agent["cwd"], "/Users/x/Demo")
+
+    def test_codex_cumulative_token_count_and_resume(self):
+        day_dir = self.root / "codex" / "sessions" / "2026" / "07" / "21"
+        day_dir.mkdir(parents=True)
+        rollout = day_dir / "rollout-2026-07-21T10-00-00-0196f3a2-1b2c-4d5e-8f90-abcdef123456.jsonl"
+        rollout.write_text("\n".join([
+            json.dumps({"type": "session_meta", "payload": {"id": "x", "cwd": "/Users/x/Red-Quail"}}),
+            json.dumps({"type": "event_msg", "payload": {"type": "token_count",
+                        "info": {"total_token_usage": {"input_tokens": 1000, "cached_input_tokens": 400, "output_tokens": 200}}}}),
+            json.dumps({"type": "event_msg", "payload": {"type": "token_count",
+                        "info": {"total_token_usage": {"input_tokens": 5000, "cached_input_tokens": 2000, "output_tokens": 800}}}}),
+        ]) + "\n")
+        agent = external_agents.read_external_agents(self.settings())[0]
+        usage = agent["usage"]
+        self.assertEqual(usage["input_tokens"], 5000)  # latest cumulative event wins
+        self.assertEqual(usage["output_tokens"], 800)
+        self.assertEqual(usage["cache_read_tokens"], 2000)
+        self.assertIsNone(usage["est_cost"])  # codex names no priced model
+        self.assertEqual(
+            agent["resume_command"],
+            "cd /Users/x/Red-Quail && codex resume 0196f3a2-1b2c-4d5e-8f90-abcdef123456",
+        )
+
+    def test_usage_accumulates_incrementally_across_appends(self):
+        session = self._write_claude_usage_session()
+        first = external_agents._session_usage(session, session.stat().st_mtime)
+        self.assertEqual(first["input_tokens"], 120)
+        with session.open("a") as handle:
+            handle.write(json.dumps({"type": "assistant", "message": {
+                "role": "assistant", "model": "claude-sonnet-5",
+                "usage": {"input_tokens": 30, "output_tokens": 10},
+                "content": [{"type": "text", "text": "Done."}]}}) + "\n")
+        import os
+        later = time.time() + 10
+        os.utime(session, (later, later))
+        second = external_agents._session_usage(session, session.stat().st_mtime)
+        self.assertEqual(second["input_tokens"], 150)
+        self.assertEqual(second["output_tokens"], 60)
+
+    def test_usage_rollup_sums_sessions_per_source(self):
+        self._write_claude_usage_session(session_name="s1", prompt="Fix the login bug")
+        self._write_claude_usage_session(session_name="s2", prompt="Write the docs")
+        rollup = external_agents.read_external_usage(self.settings())
+        self.assertEqual(len(rollup["sources"]), 1)
+        row = rollup["sources"][0]
+        self.assertEqual(row["source"], "claude")
+        self.assertEqual(row["sessions"], 2)
+        self.assertEqual(row["total_tokens"], 2340)
+        self.assertAlmostEqual(row["est_cost"], 0.0, places=1)
+        self.assertEqual(rollup["totals"]["total_tokens"], 2340)
+
+    def test_usage_rollup_skips_resumed_transcript_copies(self):
+        # A resumed conversation writes a fresh transcript with the same
+        # project and latest prompt; only the newest copy may be counted.
+        self._write_claude_usage_session(session_name="s1", prompt="Fix the login bug")
+        self._write_claude_usage_session(session_name="s1-resumed", prompt="Fix the login bug")
+        rollup = external_agents.read_external_usage(self.settings())
+        row = rollup["sources"][0]
+        self.assertEqual(row["sessions"], 1)
+        self.assertEqual(row["total_tokens"], 1170)
+
+    def test_mixed_model_sessions_price_each_message_at_its_own_rate(self):
+        sessions = self.root / "claude" / "projects" / "-Users-x-Demo"
+        sessions.mkdir(parents=True, exist_ok=True)
+        session = sessions / "mixed.jsonl"
+        session.write_text("\n".join([
+            json.dumps({"type": "user", "cwd": "/Users/x/Demo",
+                        "message": {"role": "user", "content": "Big haiku run"}}),
+            json.dumps({"type": "assistant", "message": {
+                "role": "assistant", "model": "claude-haiku-4-5",
+                "usage": {"input_tokens": 1_000_000, "output_tokens": 0},
+                "content": [{"type": "tool_use", "name": "Bash", "input": {}}]}}),
+            json.dumps({"type": "assistant", "message": {
+                "role": "assistant", "model": "claude-opus-4-8",
+                "usage": {"input_tokens": 1, "output_tokens": 0},
+                "content": [{"type": "tool_use", "name": "Bash", "input": {}}]}}),
+        ]) + "\n")
+        agent = external_agents.read_external_agents(self.settings())[0]
+        # 1M haiku input at $0.80/M plus one opus token, never $15 for the lot.
+        self.assertAlmostEqual(agent["usage"]["est_cost"], 0.8, places=3)
+
+    def test_sessions_without_usage_report_none(self):
+        _write_claude_session(self.root / "claude", "-Users-x-Demo", "/Users/x/Demo", "hello")
+        agent = external_agents.read_external_agents(self.settings())[0]
+        self.assertIsNone(agent["usage"])
+        self.assertEqual(external_agents.read_external_usage(self.settings())["sources"], [])
+
+
 class ExternalProjectRoomTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
