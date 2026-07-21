@@ -7,6 +7,7 @@ import ProjectRooms, { ProjectRoomDrawer } from './components/ProjectRooms';
 import TaskTimeline from './components/TaskTimeline';
 import CommandPalette from './components/CommandPalette';
 import SettingsPage from './components/SettingsPage';
+import { agentArtFor } from './agentArt';
 import './App.css';
 
 const API = import.meta.env.DEV ? 'http://localhost:3001' : '';
@@ -404,7 +405,7 @@ function App() {
 
         {view === 'office' && (
           <div className="office-page">
-            <OfficeFloor agents={agents} onSelectAgent={setSelectedAgent} selectedAgent={selectedAgent} timeline={timeline} projectRooms={projectRooms} onSelectProject={setSelectedProject} />
+            <OfficeFloor agents={agents} onSelectAgent={setSelectedAgent} selectedAgent={selectedAgent} timeline={timeline} projectRooms={projectRooms} onSelectProject={setSelectedProject} kanban={kanban} />
           </div>
         )}
 
@@ -415,9 +416,9 @@ function App() {
               {['all', 'working', 'queued', 'waiting', 'error', 'idle'].map((filter) => <button key={filter} className={agentFilter === filter ? 'active' : ''} onClick={() => setAgentFilter(filter)}>{filter === 'idle' ? 'On break' : filter.charAt(0).toUpperCase() + filter.slice(1)}</button>)}
             </div>
             <div className="roster-grid">
-              {filteredAgents.length ? filteredAgents.map((agent, index) => (
+              {filteredAgents.length ? filteredAgents.map((agent) => (
                 <button className="roster-card" key={agent.id} onClick={() => setSelectedAgent(agent)}>
-                  <span className={`mini-avatar tone-${index % 5}`}>{agent.name.slice(0, 2).toUpperCase()}</span>
+                  <AgentAvatar agent={agent} className="mini-avatar" />
                   <span><strong>{agent.name}{SOURCE_LABELS[agent.source] && <i className="source-badge">{SOURCE_LABELS[agent.source]}</i>}</strong><small>{agent.current_task || 'Available for work'}</small><TaskProgress item={agent} compact /></span>
                   <em className={`status-text ${agent.status}`}>{agent.status}</em>
                 </button>
@@ -439,7 +440,7 @@ function App() {
         <button className="agent-drawer-backdrop" aria-label="Close agent details" onClick={() => setSelectedAgent(null)}>
           <aside className="agent-drawer" onClick={(event) => event.stopPropagation()}>
             <button className="drawer-close" onClick={() => setSelectedAgent(null)}>×</button>
-            <span className="drawer-avatar">{selectedAgent.name.slice(0, 2).toUpperCase()}</span>
+            <AgentAvatar agent={selectedAgent} className="drawer-avatar" />
             <p className="eyebrow">AGENT PROFILE</p>
             <h2>{selectedAgent.name}</h2>
             {selectedAgent.role && <p className="drawer-role">{selectedAgent.role} · {selectedAgent.specialty}</p>}
@@ -463,6 +464,11 @@ function App() {
 
 function Panel({ title, subtitle, actions, children }) {
   return <section className="content-panel"><div className="section-heading"><div><h2>{title}</h2><p className="panel-subtitle">{subtitle}</p></div>{actions}</div>{children}</section>;
+}
+
+function AgentAvatar({ agent, className }) {
+  const art = agentArtFor(agent);
+  return <span className={`${className} agent-avatar-art`} style={{ '--agent-art-accent': art.accent }}><img src={art.src} alt="" draggable="false" /></span>;
 }
 
 function ExportButtons({ onExport, disabled = false }) {

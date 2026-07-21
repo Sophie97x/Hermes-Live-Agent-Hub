@@ -89,16 +89,60 @@ class ExternalAgentTests(unittest.TestCase):
             agents = main.read_agents()
         self.assertEqual([a for a in agents if a.get("source") == "hermes"], [])
 
-    def test_codex_subagent_threads_are_hidden(self):
+    def _write_codex_subagent(self, finished: bool = False) -> Path:
         day_dir = self.root / "codex" / "sessions" / "2026" / "07" / "20"
-        day_dir.mkdir(parents=True)
-        (day_dir / "rollout-2026-07-20T10-00-00-sub.jsonl").write_text(json.dumps({
+        day_dir.mkdir(parents=True, exist_ok=True)
+        rollout = day_dir / "rollout-2026-07-20T10-00-00-sub.jsonl"
+        lines = [json.dumps({
             "type": "session_meta",
             "payload": {"id": "sub", "cwd": "/Users/x/Demo",
                         "thread_source": "subagent", "source": {"subagent": {"other": "guardian"}}},
-        }))
+        })]
+        if finished:
+            lines.append(json.dumps({"type": "event_msg", "payload": {"type": "task_complete"}}))
+        rollout.write_text("\n".join(lines))
+        return rollout
+
+    def test_live_codex_subagent_becomes_temp_agent_with_own_card(self):
+        self._write_codex_subagent()
+        agents = external_agents.read_external_agents(self.settings())
+        self.assertEqual(len(agents), 1)
+        agent = agents[0]
+        self.assertEqual(agent["name"], "Codex temp agent")
+        self.assertEqual(agent["status"], "working")
+        self.assertTrue(agent["subagent"])
+        self.assertEqual(agent["role"], "Codex subagent")
+        cards = external_agents.read_external_tasks(self.settings())
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(cards[0]["assignee"], "Codex temp agent")
+        self.assertEqual(cards[0]["column"], "in_progress")
+        self.assertEqual(cards[0]["status"], "running")
+
+    def test_finished_subagent_thread_disappears(self):
+        self._write_codex_subagent(finished=True)
         self.assertEqual(external_agents.read_external_agents(self.settings()), [])
         self.assertEqual(external_agents.read_external_tasks(self.settings()), [])
+
+    def test_claude_sidechain_becomes_temp_agent_next_to_main_session(self):
+        _write_claude_session(self.root / "claude", "-Users-x-Demo", "/Users/x/Demo", "Fix the login bug")
+        sessions = self.root / "claude" / "projects" / "-Users-x-Demo"
+        sidechain = sessions / "side1.jsonl"
+        sidechain.write_text("\n".join([
+            json.dumps({"type": "user", "isSidechain": True, "cwd": "/Users/x/Demo",
+                        "message": {"role": "user", "content": "Explore the repo structure"}}),
+            json.dumps({"type": "assistant", "isSidechain": True, "cwd": "/Users/x/Demo",
+                        "message": {"role": "assistant", "content": [{"type": "tool_use", "name": "Bash", "input": {}}]}}),
+        ]))
+        agents = external_agents.read_external_agents(self.settings())
+        self.assertEqual(len(agents), 2)
+        by_name = {agent["name"]: agent for agent in agents}
+        self.assertIn("Claude Code temp agent", by_name)
+        temp = by_name["Claude Code temp agent"]
+        self.assertEqual(temp["status"], "working")
+        self.assertTrue(temp["subagent"])
+        self.assertEqual(temp["current_task"], "Explore the repo structure")
+        main_agent = by_name["Claude Code · Demo"]
+        self.assertNotIn("subagent", main_agent)
 
     def test_disabled_source_is_skipped(self):
         _write_claude_session(self.root / "claude", "-Users-x-Demo", "/Users/x/Demo", "hello")
@@ -193,3 +237,104 @@ class ExternalAgentTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ClaudeSubagentLayoutTests(unittest.TestCase):
+    """Claude Code stores spawned subagents in a per-session `subagents/`
+    folder with an `agent-<id>.meta.json` naming the agent type — not as
+    sidechain records in the project folder."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.addCleanup(self.temp_dir.cleanup)
+
+    def settings(self):
+        settings = json.loads(json.dumps(external_agents.DEFAULT_SETTINGS))
+        for name, source in settings["sources"].items():
+            source["home"] = str(self.root / name)
+        return settings
+
+    def _write_subagent(self, agent_id="agent-abc", meta=None, finished=False):
+        folder = self.root / "claude" / "projects" / "-Users-x-Demo" / "sess1" / "subagents"
+        folder.mkdir(parents=True, exist_ok=True)
+        last = (
+            {"role": "assistant", "content": [{"type": "text", "text": "Done."}]}
+            if finished else
+            {"role": "assistant", "content": [{"type": "tool_use", "name": "Grep", "input": {}}]}
+        )
+        (folder / f"{agent_id}.jsonl").write_text("\n".join([
+            json.dumps({"type": "user", "isSidechain": True, "cwd": "/Users/x/Demo",
+                        "message": {"role": "user", "content": "Audit the parser"}}),
+            json.dumps({"type": "assistant", "isSidechain": True, "cwd": "/Users/x/Demo",
+                        "message": last}),
+        ]))
+        if meta is not None:
+            (folder / f"{agent_id}.meta.json").write_text(json.dumps(meta))
+        return folder / f"{agent_id}.jsonl"
+
+    def test_subagent_folder_is_discovered_and_named_from_its_meta(self):
+        self._write_subagent(meta={"agentType": "caveman:cavecrew-reviewer",
+                                   "description": "Review backend diff"})
+        agents = external_agents.read_external_agents(self.settings())
+        self.assertEqual(len(agents), 1)
+        agent = agents[0]
+        self.assertTrue(agent["subagent"])
+        self.assertEqual(agent["status"], "working")
+        self.assertEqual(agent["name"], "Claude Code · cavecrew reviewer")
+        self.assertEqual(agent["current_task"], "Review backend diff")
+
+        card = external_agents.read_external_tasks(self.settings())[0]
+        self.assertEqual(card["assignee"], "Claude Code · cavecrew reviewer")
+        self.assertEqual(card["title"], "Review backend diff")
+        self.assertEqual(card["column"], "in_progress")
+
+    def test_subagent_without_meta_falls_back_to_the_generic_temp_name(self):
+        self._write_subagent(meta=None)
+        agent = external_agents.read_external_agents(self.settings())[0]
+        self.assertEqual(agent["name"], "Claude Code temp agent")
+        self.assertEqual(agent["current_task"], "Audit the parser")
+
+    def test_finished_subagent_disappears(self):
+        self._write_subagent(meta={"agentType": "explore"}, finished=True)
+        self.assertEqual(external_agents.read_external_agents(self.settings()), [])
+        self.assertEqual(external_agents.read_external_tasks(self.settings()), [])
+
+
+class ExternalProjectRoomTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.addCleanup(self.temp_dir.cleanup)
+
+    def settings(self):
+        settings = json.loads(json.dumps(external_agents.DEFAULT_SETTINGS))
+        for name, source in settings["sources"].items():
+            source["home"] = str(self.root / name)
+        return settings
+
+    def test_live_session_becomes_an_active_project_room(self):
+        _write_claude_session(self.root / "claude", "-Users-x-Demo", "/Users/x/Demo", "Fix the login bug")
+        rooms = external_agents.read_external_project_rooms(self.settings())
+        self.assertEqual(len(rooms), 1)
+        room = rooms[0]
+        self.assertEqual(room["name"], "Demo")
+        self.assertEqual(room["project_id"], "Demo")
+        self.assertEqual(room["status"], "active")
+        self.assertEqual(room["agents"], ["Claude Code"])
+        self.assertEqual(room["tasks"][0]["title"], "Fix the login bug")
+
+    def test_finished_session_room_is_completed(self):
+        _write_claude_session(self.root / "claude", "-Users-x-Demo", "/Users/x/Demo", "Ship it", finished=True)
+        room = external_agents.read_external_project_rooms(self.settings())[0]
+        self.assertEqual(room["status"], "completed")
+        self.assertEqual(room["progress"], 100)
+
+    def test_sessions_group_by_project_directory(self):
+        _write_claude_session(self.root / "claude", "-Users-x-Demo", "/Users/x/Demo", "Task A", session_name="a")
+        _write_claude_session(self.root / "claude", "-Users-x-Other", "/Users/x/Other", "Task B", session_name="b")
+        rooms = external_agents.read_external_project_rooms(self.settings())
+        self.assertEqual({room["name"] for room in rooms}, {"Demo", "Other"})
+
+    def test_no_external_sessions_means_no_rooms(self):
+        self.assertEqual(external_agents.read_external_project_rooms(self.settings()), [])

@@ -211,13 +211,14 @@ def _is_working(path: Path, mtime: float, now: float, activity_window: float) ->
 
 
 def _session_meta_json(path: Path) -> str:
-    """Launch cwd and whether this transcript is an internal subagent thread.
+    """Launch cwd and whether this transcript is a spawned subagent thread.
 
-    Codex spawns helper threads (judges, watchers) that write their own
-    rollout files; like Hermes transport sessions, they are not people and
-    should not appear in the office.
+    Codex marks subagent rollouts in session_meta; Claude Code writes sidechain
+    transcripts whose records carry isSidechain=true from the first line. Live
+    subagents appear in the office as temporary staff and vanish when done.
     """
     info = {"cwd": "", "subagent": False}
+    saw_sidechain_flag = False
     for line in _head_text(path).splitlines():
         try:
             record = json.loads(line)
@@ -230,6 +231,11 @@ def _session_meta_json(path: Path) -> str:
             if payload.get("thread_source") == "subagent" or (isinstance(source, dict) and source.get("subagent")):
                 info["subagent"] = True
             break
+        # The first record that states isSidechain decides for the whole file:
+        # sidechain transcripts open with true, main sessions open with false.
+        if not saw_sidechain_flag and "isSidechain" in record:
+            saw_sidechain_flag = True
+            info["subagent"] = bool(record.get("isSidechain"))
         cwd = record.get("cwd") or payload.get("cwd")
         if isinstance(cwd, str) and cwd:
             info["cwd"] = cwd
@@ -239,6 +245,28 @@ def _session_meta_json(path: Path) -> str:
 
 def _session_meta(path: Path, mtime: float) -> dict:
     return json.loads(_cached("meta", path, mtime, _session_meta_json))
+
+
+def _subagent_meta(path: Path) -> dict:
+    """Type and task of a spawned subagent.
+
+    Claude Code writes an `agent-<id>.meta.json` beside each subagent
+    transcript naming the agent type that was spawned and what it was asked
+    to do; other tools leave no companion file.
+    """
+    try:
+        data = json.loads(path.with_suffix(".meta.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return {"type": "", "description": ""}
+    if not isinstance(data, dict):
+        return {"type": "", "description": ""}
+    # Types are plugin-qualified ("caveman:cavecrew-reviewer"); the trailing
+    # segment is the readable agent name.
+    agent_type = str(data.get("agentType") or "").split(":")[-1]
+    return {
+        "type": agent_type.replace("-", " ").replace("_", " ").strip(),
+        "description": str(data.get("description") or "").strip(),
+    }
 
 
 def _session_created(path: Path, mtime: float) -> float:
@@ -261,7 +289,12 @@ def _session_files(source: str, home: Path) -> list[Path]:
         # For Hermes the meaningful count is the agent roster, not transcripts.
         return list(home.glob("profiles/*/profile.yaml"))
     if source == "claude":
-        return list(home.glob("projects/*/*.jsonl"))
+        # Main conversations sit beside per-session folders that hold the
+        # transcripts of any subagents that session spawned.
+        return (
+            list(home.glob("projects/*/*.jsonl"))
+            + list(home.glob("projects/*/*/subagents/*.jsonl"))
+        )
     if source == "codex":
         return list(home.glob("sessions/*/*/*/rollout-*.jsonl"))
     # OpenClaw keeps per-agent transcripts; accept both known layouts.
@@ -311,10 +344,36 @@ def read_external_tasks(settings: Optional[dict] = None) -> list[dict]:
         seen: set[tuple[str, str]] = set()
         for mtime, path in files[:12]:
             meta = _session_meta(path, mtime)
-            if meta["subagent"]:
-                continue
             working = _is_working(path, mtime, now, activity_window)
             project = Path(meta["cwd"]).name if meta["cwd"] else (path.parent.name if name == "claude" else "")
+            if meta["subagent"]:
+                # A live subagent thread gets its own temp card; finished ones vanish.
+                if not working:
+                    continue
+                prompt = _cached("prompt", path, mtime, _last_user_text)
+                spawned = _subagent_meta(path)
+                created = _session_created(path, mtime)
+                cards.append({
+                    "id": f"external-{name}-{path.stem}",
+                    "title": (spawned["description"] or prompt)[:160]
+                    or (f"{label} subagent in {project}" if project else f"{label} subagent task"),
+                    "assignee": f'{label} · {spawned["type"]}' if spawned["type"] else f"{label} temp agent",
+                    "priority": "0",
+                    "status": "running",
+                    "column": "in_progress",
+                    "detail": f'{label} subagent · {spawned["type"]}' if spawned["type"]
+                    else (f"{label} subagent · {project}" if project else f"{label} subagent"),
+                    "project": project,
+                    "workspace": "",
+                    "result": "",
+                    "failure": "",
+                    "created_at": _iso(created),
+                    "finished_at": None,
+                    "progress_value": _live_session_value(created, now),
+                    "progress_label": "Live subagent",
+                    "progress_mode": "active",
+                })
+                continue
             prompt = _cached("prompt", path, mtime, _last_user_text)
             if (project, prompt) in seen:
                 continue
@@ -371,14 +430,45 @@ def read_external_agents(settings: Optional[dict] = None) -> list[dict]:
         seen_projects: set[str] = set()
         seen_conversations: set[tuple[str, str]] = set()
         added = 0
+        sub_added = 0
         label = source.get("label") or _SOURCE_META[name]["role"]
         for mtime, path in files:
-            if added >= max_per_source:
+            if added >= max_per_source and sub_added >= max_per_source:
                 break
             meta = _session_meta(path, mtime)
-            if meta["subagent"]:
-                continue
             project = Path(meta["cwd"]).name if meta["cwd"] else (path.parent.name if name == "claude" else "")
+            if meta["subagent"]:
+                # Live subagent threads work in the office as temporary staff;
+                # they clock out (disappear) the moment their thread finishes.
+                if sub_added >= max_per_source or not _is_working(path, mtime, now, activity_window):
+                    continue
+                task = _cached("prompt", path, mtime, _last_user_text)
+                spawned = _subagent_meta(path)
+                sub_added += 1
+                agents.append({
+                    "id": f"{name}-{path.stem.lower()}",
+                    "name": f'{label} · {spawned["type"]}' if spawned["type"] else f"{label} temp agent",
+                    "role": f'{_SOURCE_META[name]["role"]} subagent',
+                    "specialty": spawned["type"] or "Temporary helper spawned by a live session",
+                    "home": "coding",
+                    "source": name,
+                    "subagent": True,
+                    "status": "working",
+                    "status_reason": "subagent_active",
+                    "current_task": (spawned["description"] or task)[:160]
+                    or (f"Helping in {project}" if project else "Helping a live session"),
+                    "started_at": None,
+                    "last_activity_at": _iso(mtime),
+                    "task_id": None,
+                    "run_id": None,
+                    "progress_value": _live_session_value(_session_created(path, mtime), now),
+                    "progress_label": "Live subagent",
+                    "progress_mode": "active",
+                    "position": {"top": 10, "left": 10},
+                })
+                continue
+            if added >= max_per_source:
+                continue
             project_key = path.parent.name if name == "claude" else project
             working = _is_working(path, mtime, now, activity_window)
             task = _cached("prompt", path, mtime, _last_user_text)
@@ -422,3 +512,48 @@ def read_external_agents(settings: Optional[dict] = None) -> list[dict]:
             name_seen[agent["name"]] = name_seen.get(agent["name"], 0) + 1
             agent["name"] = f'{agent["name"]} ({name_seen[agent["name"]]})'
     return agents
+
+
+def read_external_project_rooms(settings: Optional[dict] = None) -> list[dict]:
+    """Project rooms for external tools, one per working directory.
+
+    Hermes projects come from its task database; Claude/Codex work has no such
+    board, so each tool's sessions are grouped by the project they run in and
+    presented in the same shape, with live sessions (and their subagents)
+    keeping the room active.
+    """
+    rooms: dict[str, dict] = {}
+    for card in read_external_tasks(settings):
+        project = card.get("project") or ""
+        key = f'external:{project or card["assignee"]}'
+        room = rooms.setdefault(key, {
+            "id": key,
+            "name": project or card["assignee"],
+            "project_id": project,
+            "status": "completed",
+            "tasks": [],
+            "agents": [],
+            "workspace": "",
+            "updated_at": "",
+        })
+        if card["assignee"] not in room["agents"]:
+            room["agents"].append(card["assignee"])
+        room["tasks"].append({
+            "id": card["id"],
+            "title": card["title"],
+            "assignee": card["assignee"],
+            "status": card["status"],
+            "created_at": card["created_at"],
+            "finished_at": card["finished_at"],
+            "result": "",
+            "failure": "",
+        })
+        stamp = card.get("finished_at") or card.get("created_at") or ""
+        room["updated_at"] = max(room["updated_at"], stamp)
+
+    for room in rooms.values():
+        room["status"] = "active" if any(task["status"] == "running" for task in room["tasks"]) else "completed"
+        done = sum(task["status"] == "done" for task in room["tasks"])
+        room["progress"] = round(done / len(room["tasks"]) * 100) if room["tasks"] else 0
+        room["tasks"].sort(key=lambda task: task["created_at"] or "", reverse=True)
+    return sorted(rooms.values(), key=lambda room: room["updated_at"] or "", reverse=True)

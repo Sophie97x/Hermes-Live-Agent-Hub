@@ -216,3 +216,53 @@
 /* External agent source badges (Claude Code / Codex / OpenClaw). */
 .source-badge{display:inline-block;margin-left:8px;padding:2px 7px;border:1px solid #3a3f52;border-radius:999px;background:#232838;color:#a8a1c8;font:600 9px system-ui,sans-serif;font-style:normal;letter-spacing:.04em;text-transform:uppercase;vertical-align:2px}
 :root[data-theme="light"] .source-badge{border-color:#dcd8ea;background:#eeeafb;color:#5a4bb8}
+
+/* Generated character portraits shared by roster and profile drawer. */
+.agent-avatar-art{
+  position:relative;
+  isolation:isolate;
+  overflow:hidden;
+  flex:0 0 auto;
+  border:1px solid color-mix(in srgb,var(--agent-art-accent),transparent 45%);
+  background:
+    linear-gradient(180deg,transparent 64%,color-mix(in srgb,var(--agent-art-accent),transparent 70%)),
+    radial-gradient(circle at 50% 22%,color-mix(in srgb,var(--agent-art-accent),#fff 16%) 0,transparent 56%),
+    #111722;
+  box-shadow:inset 0 0 0 1px #ffffff0e,0 8px 20px #0004,0 0 18px color-mix(in srgb,var(--agent-art-accent),transparent 82%);
+}
+.agent-avatar-art::before{
+  content:"";
+  position:absolute;
+  z-index:0;
+  inset:0;
+  background:repeating-linear-gradient(180deg,transparent 0 5px,#ffffff08 6px);
+  pointer-events:none;
+}
+.agent-avatar-art::after{
+  content:"";
+  position:absolute;
+  z-index:2;
+  right:13%;
+  bottom:7%;
+  left:13%;
+  height:8%;
+  border-radius:50%;
+  background:radial-gradient(ellipse,var(--agent-art-accent),transparent 72%);
+  opacity:.62;
+  pointer-events:none;
+}
+.agent-avatar-art img{
+  position:absolute;
+  z-index:1;
+  left:50%;
+  max-width:none;
+  filter:drop-shadow(0 4px 3px #000b);
+  pointer-events:none;
+  user-select:none;
+}
+.mini-avatar.agent-avatar-art{width:50px;height:50px;border-radius:15px;background-color:#111722}
+.mini-avatar.agent-avatar-art img{top:1%;width:90%;height:auto;transform:translateX(-50%) scale(1.45);transform-origin:50% 5%;transition:transform .2s ease}
+.roster-card:hover .mini-avatar.agent-avatar-art img{transform:translateX(-50%) scale(1.52)}
+.drawer-avatar.agent-avatar-art{width:104px;height:122px;margin-bottom:24px;border-radius:24px;background-color:#111722}
+.drawer-avatar.agent-avatar-art img{bottom:0;width:88%;height:auto;transform:translateX(-50%) scale(1.08);transform-origin:50% 100%}
+:root[data-theme="light"] .agent-avatar-art{background-color:#eef2f8;box-shadow:inset 0 0 0 1px #fff8,0 8px 20px #52607b24,0 0 18px color-mix(in srgb,var(--agent-art-accent),transparent 84%)}
