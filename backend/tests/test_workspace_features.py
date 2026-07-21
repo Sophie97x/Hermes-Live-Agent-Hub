@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from backend import main
+from backend import external_agents, main
 
 
 class WorkspaceFeaturesTests(unittest.TestCase):
@@ -50,7 +50,18 @@ class WorkspaceFeaturesTests(unittest.TestCase):
             connection.execute("INSERT INTO sessions VALUES (?,?,?,?)", ("worker-session", "Implement feature", "subagent", 130))
             connection.execute("INSERT INTO messages VALUES (?,?,?,?,?,?,?)", (1, "worker-session", "assistant", "Working on it", None, 140, 1))
 
-        self.patchers = [patch.object(main, "KANBAN_DB", self.kanban), patch.object(main, "STATE_DB", self.state)]
+        # Point the external tools at an empty temp root so these tests read
+        # only their own fixtures, never the developer's real ~/.claude state.
+        # Hermes keeps its default home so the patched DB paths still resolve.
+        isolated = json.loads(json.dumps(external_agents.DEFAULT_SETTINGS))
+        for name, source in isolated["sources"].items():
+            if name != "hermes":
+                source["home"] = str(root / "external")
+        self.patchers = [
+            patch.object(main, "KANBAN_DB", self.kanban),
+            patch.object(main, "STATE_DB", self.state),
+            patch.object(external_agents, "load_settings", return_value=isolated),
+        ]
         for patcher in self.patchers:
             patcher.start()
 

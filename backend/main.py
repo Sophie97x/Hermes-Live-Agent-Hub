@@ -766,7 +766,9 @@ def read_project_rooms() -> list[dict]:
         room["updated_at"] = _iso(room["updated_at"])
         room["tasks"].sort(key=lambda task: task["created_at"] or "", reverse=True)
 
-    return sorted(rooms.values(), key=lambda room: room["updated_at"] or "", reverse=True)[:30]
+    ordered = sorted(rooms.values(), key=lambda room: room["updated_at"] or "", reverse=True)
+    external = external_agents.read_external_project_rooms()
+    return sorted([*ordered, *external], key=lambda room: room["updated_at"] or "", reverse=True)[:30]
 
 
 def read_task_timeline(limit: int = 120) -> list[dict]:
