@@ -34,3 +34,7 @@ outputs/
 .vscode/
 *.log
 .worktrees/
+
+# Local tool workspaces
+.claude/
+experiments/
