@@ -1,82 +1,68 @@
 # Hermes Live Agent Hub
 
-> A small, local-first office dashboard I built to make my Hermes agents feel like a real team rather than a list of terminal sessions.
+> I built this because I wanted one place to see what my local agent team was actually doing, without jumping between terminals, databases and log files.
 
 ![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-local_backend-009688?logo=fastapi&logoColor=white)
-![Status](https://img.shields.io/badge/status-personal_project-7565e8)
-![Data](https://img.shields.io/badge/data-local_only-5dd49a)
+![Phaser](https://img.shields.io/badge/Pixel_mode-Phaser_3-5865F2)
+![Data](https://img.shields.io/badge/data-local_only-5DD49A)
 
-![Hermes Live Agent Hub office view](docs/screenshots/office.png)
+| Photo office | Pixel office |
+|:--:|:--:|
+| ![Photo office view](docs/screenshots/office.png) | ![Pixel office view](docs/screenshots/pixel-office.png) |
+| The detailed office I use day to day. | A lighter, game-like view with two floors, walking agents, pan and zoom. |
 
-## Why I made it
+## What it is
 
-I wanted a quick way to look at Hermes and understand what the whole team was doing without digging through terminals, databases or log files. The hub turns that state into a live office: verified workers move to the department that matches their work, queued agents wait in the Meeting Room, idle agents head to the Break Room, and Friday stays in Operations coordinating the team.
+Hermes Live Agent Hub is a local dashboard for Hermes and the other coding agents running on my Mac. It turns their real state into an office instead of pretending every open session is busy.
 
-It is deliberately lightweight. The characters and movement use small CSS animations, the backend reads Hermes state directly, and there is no WebGL engine or heavy UI framework running in the background.
+Working agents sit in the department that matches their task. Queued or blocked work moves to the Meeting Room, idle agents head upstairs, and Friday stays available to coordinate the team. Clicking an agent opens the task, current status, recent activity and any linked conversation history I have locally.
 
-## What it does
+The Photo view is still the default. Pixel mode is optional and lazy-loads Phaser only when I switch to it, so the normal dashboard does not pay for the game engine.
 
-- Discovers new Hermes agent profiles automatically
-- Shows verified working, queued, waiting, failed and idle states in a live office
-- Shows compact workflow-stage progress bars on agents, speech bubbles and active task cards
-- Routes agents between seven departments based on their current task
-- Shows up to three active projects with real total task progress in the empty central corridor
-- Keeps idle agents together in the Break Room
-- Opens agent profiles and readable speech bubbles on click
-- Shows backlog, active, review, completed and archived work
-- Groups connected tasks and sessions into clickable Project Rooms with progress and team membership
-- Shows a verified live task timeline from assignment and claim through completion or failure
-- Adds recent linked conversation history inside every agent profile
-- Replays real task history in the office so agents move through their past departments
-- Supports opt-in desktop alerts for failures, stuck work, reviews and completions
-- Includes a `⌘K` command palette for agents, projects, tasks and navigation
-- Remembers whether Completed and Archive are minimized
-- Includes Midnight, Daylight and Botanical office themes
-- Supports a clutter-free full-screen office view
-- Shows hub uptime, gateway health, failed work and stuck jobs in one compact panel
-- Provides in-app failure alerts and a one-click self-recovering restart
-- Uses server-sent events for live updates and pauses background polling when the tab is hidden
-- Also discovers local Claude Code, Codex and OpenClaw sessions and seats them in the office alongside the Hermes team
-- Includes a Settings page to enable or disable each agent source, point at custom state directories and tune activity windows
+## What I use it for
+
+- Seeing who is genuinely working, queued, waiting, idle or stuck
+- Checking task-stage progress without made-up time estimates
+- Following projects across Backlog, In progress, Review, Completed and Archive
+- Opening Project Rooms with their tasks, progress and assigned team
+- Replaying real task history and watching agents move through past departments
+- Reading recent local conversation history from an agent profile
+- Spotting failures, stale workers and gateway problems quickly
+- Finding agents, projects, tasks or views with `⌘K`
+- Keeping Claude Code, Codex and OpenClaw sessions in the same roster as Hermes agents
+- Switching between Midnight, Daylight and Botanical themes or using the office full screen
+
+There are desktop alerts too, but they are opt-in. I only use them for work entering review, completing, becoming blocked or failing.
 
 ## What “live” means
 
-The green connection badge means the dashboard is connected to the local Hermes data, not that every assigned agent is running. A specialist only appears as working when Hermes has a running task, a live worker PID and a heartbeat from the last 120 seconds. Assigned cards without a worker are queued; blocked or stale work needs attention. Progress bars show the verified workflow stage (queued, running, paused, review or complete), while a shimmer shows that an active worker is still alive; they do not invent a percentage from elapsed time.
+The green Online badge means the Hub is connected to local Hermes data. It does not mean every assigned card has a running worker.
 
-Friday uses real session messages rather than old unclosed session records. She remains active for five minutes after recent session activity, then returns to idle. This keeps the office useful without pretending that an old task or terminal session is still running.
+An agent is shown as working only when Hermes has a running task, a live worker PID and a recent heartbeat. Assigned work without a worker is queued, while blocked or stale work is surfaced for attention. Progress bars show verified workflow stages such as queued, running, paused, review and complete. The shimmer means a worker is alive; it is not a fake percentage based on elapsed time.
 
-## Task history
-
-The Task Board gives me one place to see current work and the projects the team has already completed. Completed and Archive can be minimized independently, and that choice is remembered after navigating away or refreshing the page.
-
-![Hermes Live Agent Hub task board](docs/screenshots/task-board.png)
+Friday is handled from recent session messages rather than old unclosed session records, so she returns to idle when the conversation has actually gone quiet.
 
 ## How it works
 
 ```text
 Hermes local state (~/.hermes)
-        │
-        ├── sessions, messages and task databases
-        ├── task events and project links
-        ├── cron jobs
-        └── agent profiles
+Claude Code / Codex / OpenClaw sessions
                 │
                 ▼
-        FastAPI read-only adapter
+        FastAPI local adapter
                 │
-                ├── JSON endpoints
-                └── live server-sent events
-                        │
-                        ▼
-                  React office UI
+        JSON + server-sent events
+                │
+                ▼
+          React office UI
+          ├── Photo view
+          └── Pixel view (Phaser)
 ```
 
-The backend reads local SQLite and JSON files without modifying them. It can also read the session transcripts other local coding agents keep on disk — Claude Code (`~/.claude/projects`), Codex (`~/.codex/sessions`) and OpenClaw (`~/.openclaw`) — so those tools appear in the office when they are active. Each source can be switched off or repointed from the Settings page, which persists to `~/.config/hermes-agent-hub/settings.json`, the only file the hub ever writes. It automatically merges the legacy Kanban database with every project-scoped board under `~/.hermes/kanban/boards/`, so newly created project work appears without restarting or reconfiguring the hub. Agent profiles are scanned from the Hermes profiles directory, so adding or removing an agent does not require editing the frontend.
+The backend reads local SQLite, JSON and session files. It merges the legacy Hermes Kanban database with project boards under `~/.hermes/kanban/boards/`, scans agent profiles automatically and streams live updates to the browser.
 
-Project Rooms are derived from real project IDs, linked task graphs and originating Hermes sessions. The timeline excludes noisy heartbeat events, while office replay uses those same verified task events rather than fabricated animation data. Conversation history only shows locally stored messages already linked to an agent's task or worker session.
-
-Desktop alerts are off by default. They can be enabled from System Health and are limited to work that completes, enters review, becomes blocked or fails. Press `⌘K` anywhere in the hub to find an agent, project, task or view.
+The only Hub-owned configuration file on disk is `~/.config/hermes-agent-hub/settings.json`. The browser also remembers small UI choices such as the theme and office view. From the Settings page I can disable a source, point it at a different state directory or adjust its activity window.
 
 ## Run it locally
 
@@ -95,9 +81,9 @@ pip install -r requirements.txt
 python -m uvicorn main:app --host 127.0.0.1 --port 3001
 ```
 
-Then open [http://localhost:3001](http://localhost:3001).
+Open [http://localhost:3001](http://localhost:3001). The FastAPI process serves both the API and the built frontend.
 
-By default the hub reads Hermes state from `~/.hermes`. Both local locations can be overridden:
+By default the Hub reads Hermes from `~/.hermes`. The main local paths can be overridden when needed:
 
 ```bash
 HERMES_HOME=/path/to/.hermes \
@@ -105,17 +91,31 @@ OBSIDIAN_PROJECTS=/path/to/obsidian/projects \
 python -m uvicorn main:app --host 127.0.0.1 --port 3001
 ```
 
-## Project structure
+For frontend work:
+
+```bash
+cd frontend
+npm run dev      # Vite on port 5174
+npm test
+npm run lint
+```
+
+## Project layout
 
 ```text
-backend/                  FastAPI app and local state readers
-frontend/                 React and Vite interface
-frontend/src/components/  Office, Task Board, Activity and Schedule views
-docs/screenshots/         Screenshots used in this README
+backend/                  FastAPI app and local-state readers
+frontend/                 React/Vite interface
+frontend/src/components/  Office, board, timeline and settings views
+frontend/src/pixel/       Pixel office scene, floors and movement
+docs/screenshots/         Images used in this README
 ```
 
 ## Privacy
 
-The hub does not need an API key and does not send Hermes data to a hosted service. Local databases, environment files, build output and generated working files are excluded from Git.
+The Hub does not need an API key and does not send agent data to a hosted service. Databases, environment files, build output and generated work stay local and are excluded from Git.
 
-This is a personal project built around my own Hermes setup, but I have kept the paths configurable so it can be adapted to another local installation.
+This is a personal project built around my own Hermes setup. I have kept the paths and agent sources configurable so somebody else can adapt it without copying my machine layout.
+
+## Credits
+
+The Pixel office is adapted from [SkyOffice](https://github.com/kevinshen56714/SkyOffice) by Kuan-Hsuan Shen. SkyOffice is MIT licensed; its notice is included with the Pixel assets. Original pixel art is by LimeZu: [Modern Office](https://limezu.itch.io/modernoffice) and [Modern Interiors](https://limezu.itch.io/moderninteriors).
