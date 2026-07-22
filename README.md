@@ -26,7 +26,7 @@ The Photo view is still the default. Pixel mode is optional and lazy-loads Phase
 - Checking task-stage progress without made-up time estimates
 - Following projects across Backlog, In progress, Review, Completed and Archive
 - Opening Project Rooms with their tasks, progress and assigned team
-- Replaying real task history and watching agents move through past departments
+- Replaying recent task history without disturbing live agent positions
 - Reading recent local conversation history from an agent profile
 - Spotting failures, stale workers and gateway problems quickly
 - Finding agents, projects, tasks or views with `⌘K`

@@ -11,6 +11,109 @@ export const OFFICE_PATH = Object.freeze({
   xScale: 1.5,
 });
 
+// Architectural collision lines traced from the two photo maps. Doorways are
+// literal gaps in these spans, so every route is checked against the same wall
+// geometry the agent sees rather than against a loose room bounding box.
+const wall = (x1, y1, x2, y2) => Object.freeze([[x1, y1], [x2, y2]]);
+
+export const OFFICE_WALL_CLEARANCE = 0.85;
+export const OFFICE_WALLS = Object.freeze({
+  ground: Object.freeze([
+    wall(1.2, 1.2, 98.4, 1.2),
+    wall(1.2, 1.2, 1.2, 96.2),
+    wall(1.2, 96.2, 98.4, 96.2),
+    wall(98.4, 1.2, 98.4, 96.2),
+    wall(30.7, 1.2, 30.7, 42.5),
+    wall(58.4, 1.2, 58.4, 42.5),
+    wall(30.4, 59, 30.4, 96.2),
+    wall(56.8, 59, 56.8, 96.2),
+    wall(84.5, 1.2, 84.5, 42.5),
+    wall(84.5, 59, 84.5, 96.2),
+    // North room wall, split around the three glass doors.
+    wall(1.2, 42.5, 12.3, 42.5),
+    wall(22.7, 42.5, 37.2, 42.5),
+    wall(47.8, 42.5, 64.1, 42.5),
+    wall(74.9, 42.5, 84.5, 42.5),
+    // South room wall, split around its three glass doors.
+    wall(1.2, 59, 15.2, 59),
+    wall(25.8, 59, 37.2, 59),
+    wall(47.8, 59, 61.8, 59),
+    wall(72.2, 59, 84.5, 59),
+  ]),
+  upper: Object.freeze([
+    wall(1.2, 1.2, 98.4, 1.2),
+    wall(1.2, 1.2, 1.2, 96.2),
+    wall(1.2, 96.2, 98.4, 96.2),
+    wall(98.4, 1.2, 98.4, 96.2),
+    // Glass partitions have a shared circulation opening around y=59.
+    wall(31.1, 1.2, 31.1, 51.8),
+    wall(31.1, 65, 31.1, 96.2),
+    wall(58.4, 1.2, 58.4, 51.8),
+    wall(58.4, 65, 58.4, 96.2),
+    // Stairwell wall, split around the open landing threshold.
+    wall(84.5, 1.2, 84.5, 47.5),
+    wall(84.5, 56.5, 84.5, 96.2),
+  ]),
+});
+
+function segmentIntersectsRect(start, end, minX, minY, maxX, maxY) {
+  const dx = end[0] - start[0];
+  const dy = end[1] - start[1];
+  let near = 0;
+  let far = 1;
+  const clips = [
+    [-dx, start[0] - minX],
+    [dx, maxX - start[0]],
+    [-dy, start[1] - minY],
+    [dy, maxY - start[1]],
+  ];
+  for (const [direction, distance] of clips) {
+    if (Math.abs(direction) < 1e-9) {
+      if (distance < 0) return false;
+      continue;
+    }
+    const ratio = distance / direction;
+    if (direction < 0) near = Math.max(near, ratio);
+    else far = Math.min(far, ratio);
+    if (near > far) return false;
+  }
+  return true;
+}
+
+export function segmentCrossesWall(floor, start, end, clearance = OFFICE_WALL_CLEARANCE) {
+  if (!Array.isArray(start) || !Array.isArray(end)) return true;
+  return (OFFICE_WALLS[floor] || []).some(([from, to]) => segmentIntersectsRect(
+    start,
+    end,
+    Math.min(from[0], to[0]) - clearance,
+    Math.min(from[1], to[1]) - clearance,
+    Math.max(from[0], to[0]) + clearance,
+    Math.max(from[1], to[1]) + clearance,
+  ));
+}
+
+export function routeCrossesWall(phases, clearance = OFFICE_WALL_CLEARANCE) {
+  return (phases || []).some((phase) => (phase.path || []).some((point, index, path) => (
+    index > 0 && segmentCrossesWall(phase.floor, path[index - 1], point, clearance)
+  )));
+}
+
+export function distanceToSegment(point, start, end, xScale = OFFICE_PATH.xScale) {
+  if (!Array.isArray(point) || !Array.isArray(start) || !Array.isArray(end)) return Infinity;
+  const ax = start[0] * xScale;
+  const ay = start[1];
+  const bx = end[0] * xScale;
+  const by = end[1];
+  const px = point[0] * xScale;
+  const py = point[1];
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lengthSquared = dx * dx + dy * dy;
+  if (!lengthSquared) return Math.hypot(px - ax, py - ay);
+  const progress = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lengthSquared));
+  return Math.hypot(px - (ax + dx * progress), py - (ay + dy * progress));
+}
+
 function compactPath(points) {
   const kept = [];
   for (const point of points) {
@@ -21,12 +124,39 @@ function compactPath(points) {
   return kept;
 }
 
-function routeForKnownSeat(position, room) {
+function projectToSegment(point, start, end) {
+  const dx = end[0] - start[0];
+  const dy = end[1] - start[1];
+  const lengthSquared = dx * dx + dy * dy;
+  if (!lengthSquared) return [...start];
+  const progress = Math.max(0, Math.min(1, (
+    (point[0] - start[0]) * dx + (point[1] - start[1]) * dy
+  ) / lengthSquared));
+  return [start[0] + dx * progress, start[1] + dy * progress];
+}
+
+// Join an arbitrary live position back onto a room's known egress network.
+// This matters when an agent is rerouted mid-walk: a straight line to the
+// Break Room door would otherwise cut through both glass partition walls.
+function routeForKnownEgress(position, room) {
   if (!Array.isArray(room?.spots) || !Array.isArray(room?.egress)) return null;
-  const index = room.spots.findIndex((spot) => (
-    Math.hypot(position[0] - spot[0], position[1] - spot[1]) < 2.6
-  ));
-  return index >= 0 && Array.isArray(room.egress[index]) ? room.egress[index] : null;
+  let best = null;
+  room.spots.forEach((spot, routeIndex) => {
+    if (!Array.isArray(room.egress[routeIndex])) return;
+    const route = [spot, ...room.egress[routeIndex]];
+    for (let index = 1; index < route.length; index += 1) {
+      const projected = projectToSegment(position, route[index - 1], route[index]);
+      if (segmentCrossesWall(room.floor, position, projected)) continue;
+      const distance = Math.hypot(
+        (position[0] - projected[0]) * OFFICE_PATH.xScale,
+        position[1] - projected[1],
+      );
+      if (!best || distance < best.distance) {
+        best = { distance, path: compactPath([position, projected, ...route.slice(index)]) };
+      }
+    }
+  });
+  return best?.path || null;
 }
 
 function roomToDoor(position, room) {
@@ -34,16 +164,23 @@ function roomToDoor(position, room) {
   if (!entry?.door || !entry?.inside) {
     throw new TypeError('Every office room needs an entry door and inside waypoint.');
   }
-  const seatRoute = routeForKnownSeat(position, room);
+  // A live reroute can begin after the agent has already left its room. Keep a
+  // point in the ground-floor corridor in that corridor instead of pulling it
+  // back through whichever room happens to own the stale route metadata.
+  if (
+    room.floor === 'ground'
+    && position[1] >= 42.5
+    && position[1] <= 59
+  ) {
+    return compactPath([position, [position[0], OFFICE_PATH.corridorY]]);
+  }
+  const egressRoute = routeForKnownEgress(position, room);
   const alignment = entry.axis === 'horizontal'
     ? [entry.inside[0], position[1]]
     : [position[0], entry.inside[1]];
-  return compactPath([
-    position,
-    ...(seatRoute || [alignment]),
-    entry.inside,
-    entry.door,
-  ]);
+  return compactPath(egressRoute
+    ? [...egressRoute, entry.inside, entry.door]
+    : [position, alignment, entry.inside, entry.door]);
 }
 
 function sameFloorRoute(start, end, startRoom, endRoom) {

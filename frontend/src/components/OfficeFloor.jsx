@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { agentArtFor } from '../agentArt';
 import groundFloorPhoto from '../assets/office-ground-real.png';
 import firstFloorPhoto from '../assets/office-first-real.png';
@@ -14,6 +14,15 @@ import {
   routeLength,
 } from '../utils/pathfinding';
 import { destinationFor } from '../utils/agentRooms';
+import {
+  allocateStableSeats,
+  applyReplayContext,
+  currentLocationFor,
+  placementsDiffer,
+  prepareReplayEvents,
+  resolveMovementOriginRoom,
+  tempAgentLifecycleChanges,
+} from '../utils/officeState';
 
 // Fixed coordinate space matching the 3:2 floor photos. Every percent-positioned
 // overlay lives on this stage, which scales uniformly to fit the map container,
@@ -39,6 +48,9 @@ const PROJECT_DOCK_CAPACITY = 3;
 const FIGHT_TRIGGER_DISTANCE = 5.5;
 const FIGHT_DURATION_MS = 5000;
 const FIGHT_COOLDOWN_MS = 20000;
+// Followers pause instead of occupying the same floor-space or crossing
+// through another moving agent on a shared corridor segment.
+const AGENT_WALK_CLEARANCE = 3.8;
 
 // A synthetic "room" anchored exactly where an agent happens to be (a fight,
 // a doorway), used to resume a route from there rather than from a real
@@ -208,34 +220,42 @@ const ROOMS = {
 };
 
 const roomOrder = ['coding', 'research', 'creative', 'operations', 'meeting', 'quality', 'breakroom'];
+const ROOM_FLOORS = Object.freeze(Object.fromEntries(
+  roomOrder.map((room) => [room, ROOMS[room].floor]),
+));
+const ROOM_SPOT_COUNTS = Object.freeze(Object.fromEntries(
+  roomOrder.map((room) => [room, ROOMS[room].spots.length]),
+));
+// Temporary agents enter and leave at one visible point just inside the Break
+// Room stair threshold. A synthetic portal room keeps that short leg on the
+// open landing instead of sending it through lounge furniture or partitions.
+const TEMP_AGENT_SPAWN = Object.freeze([...ROOMS.breakroom.entry.inside]);
+const TEMP_AGENT_PORTAL_ROOM = Object.freeze({
+  floor: 'upper',
+  entry: Object.freeze({
+    door: TEMP_AGENT_SPAWN,
+    inside: TEMP_AGENT_SPAWN,
+    axis: 'horizontal',
+  }),
+});
 const THEMES = {
   midnight: { label: 'Midnight' },
   daylight: { label: 'Daylight' },
   botanical: { label: 'Botanical' },
 };
 
-// Seat plan for the Break Room: wandering agents keep their chosen spot, the
-// rest fill the remaining seats in arrival order.
-function planBreakroomSeats(ids, overrides) {
-  const spotCount = ROOMS.breakroom.spots.length;
-  const plan = {};
-  const taken = new Set();
-  for (const id of ids) {
-    const seat = overrides[id];
-    if (Number.isInteger(seat) && seat >= 0 && seat < spotCount && !taken.has(seat)) {
-      plan[id] = seat;
-      taken.add(seat);
-    }
+function resolveRouteOrigin(active, floor, position, previousRoom) {
+  const fallbackRoom = resolveMovementOriginRoom(active, floor, previousRoom, ROOM_FLOORS);
+  let config = ROOMS[fallbackRoom] || corridorWaypointRoom(floor, position);
+
+  // An agent already in a circulation area must continue from that exact
+  // point; pulling it back through its stale room would cross a wall.
+  if (floor === 'ground' && position[1] >= 42 && position[1] <= 59) {
+    config = corridorWaypointRoom('ground', [position[0], OFFICE_PATH.corridorY]);
+  } else if (floor === 'upper' && isNearPoint(position, OFFICE_PATH.stairPortal.upper, 8)) {
+    config = corridorWaypointRoom('upper', OFFICE_PATH.stairPortal.upper);
   }
-  let cursor = 0;
-  for (const id of ids) {
-    if (plan[id] != null) continue;
-    while (taken.has(cursor) && cursor < spotCount) cursor += 1;
-    plan[id] = cursor;
-    taken.add(cursor);
-    cursor += 1;
-  }
-  return plan;
+  return { room: fallbackRoom, config };
 }
 
 const PLAN_DESKS = [
@@ -466,6 +486,11 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [],
   const [agentPositions, setAgentPositions] = useState({});
   const previousRooms = useRef({});
   const previousPositions = useRef({});
+  const previousRosterRef = useRef(new Map());
+  const lastPlacedRef = useRef(new Map());
+  const departingRef = useRef(new Map());
+  const seatAssignmentsRef = useRef({});
+  const [departingAgents, setDepartingAgents] = useState([]);
   const movementRef = useRef({});
   const movementFrameRef = useRef(null);
   const movementTickRef = useRef(null);
@@ -578,11 +603,11 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [],
     await request?.call(map);
   };
   const replayAgents = useMemo(() => [...new Set(timeline.map((event) => event.agent).filter(Boolean))].sort(), [timeline]);
-  const replayable = useMemo(() => timeline
-    .filter((event) => event.agent && ['claimed', 'started', 'completed', 'blocked', 'failed', 'review'].includes(event.kind))
-    .filter((event) => replayAgent === 'all' || event.agent === replayAgent)
-    .slice(0, replayAgent === 'all' ? 30 : 60)
-    .reverse(), [timeline, replayAgent]);
+  const replayable = useMemo(() => prepareReplayEvents(
+    timeline,
+    replayAgent,
+    replayAgent === 'all' ? 30 : 60,
+  ), [timeline, replayAgent]);
   const replayEvent = replayActive ? replayable[replayIndex] : null;
   useEffect(() => {
     setReplayIndex(0);
@@ -605,27 +630,26 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [],
     status: 'working',
     current_task: agent.current_task || `Demo shift ${index + 1}: heads-down at the desk`,
   })) : agents;
-  const displayAgents = demoAgents.map((agent) => agent.name.toLowerCase() === replayEvent?.agent.toLowerCase() ? {
-    ...agent,
-    status: ['blocked', 'failed'].includes(replayEvent.kind) ? 'waiting' : 'working',
-    current_task: replayEvent.task_title,
-  } : agent);
-  const roomUse = Object.fromEntries(roomOrder.map((room) => [room, 0]));
+  const displayAgents = demoAgents.map((agent) => applyReplayContext(agent, replayEvent));
   const orderedAgents = [...displayAgents].slice(0, 24).sort((left, right) => {
     const roomDifference = roomOrder.indexOf(destinationFor(left)) - roomOrder.indexOf(destinationFor(right));
     return roomDifference || left.id.localeCompare(right.id);
   });
-  const breakroomSeatPlan = planBreakroomSeats(
-    orderedAgents.filter((agent) => destinationFor(agent) === 'breakroom').map((agent) => agent.id),
+  const seatAssignments = allocateStableSeats(
+    orderedAgents.map((agent) => ({ id: agent.id, room: destinationFor(agent) })),
+    ROOM_SPOT_COUNTS,
+    seatAssignmentsRef.current,
     wanderSeats,
   );
+  seatAssignmentsRef.current = seatAssignments;
   const placedAgents = orderedAgents.map((agent) => {
     const room = destinationFor(agent);
-    const slot = room === 'breakroom' ? breakroomSeatPlan[agent.id] : roomUse[room]++;
+    const allocation = seatAssignments[agent.id];
+    const slot = allocation?.slot || 0;
     const spots = ROOMS[room].spots;
-    const seatIndex = slot % spots.length;
+    const seatIndex = allocation?.seatIndex ?? slot % spots.length;
     const [targetLeft, targetTop] = spots[seatIndex];
-    const overflow = Math.floor(slot / spots.length);
+    const overflow = allocation?.overflow ?? Math.floor(slot / spots.length);
     const left = targetLeft + overflow * 1.6;
     const top = targetTop + overflow * 1.5;
     const previous = previousPositions.current[agent.id];
@@ -633,12 +657,16 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [],
     const movementSample = movement ? interpolateRoute(movement.phases, movement.progress) : null;
     const positionOverride = agentPositions[agent.id];
     const previousRoom = previousRooms.current[agent.id];
+    const arrivingTemp = agent.subagent === true
+      && !previousRoom
+      && !movement
+      && !departingRef.current.has(agent.id);
     const pendingFloor = previousRoom && previousRoom !== room
       ? ROOMS[previousRoom]?.floor
       : ROOMS[room].floor;
     const currentPosition = Array.isArray(positionOverride)
       ? positionOverride
-      : Array.isArray(previous) ? previous : [left, top];
+      : Array.isArray(previous) ? previous : arrivingTemp ? TEMP_AGENT_SPAWN : [left, top];
     return {
       ...agent,
       room,
@@ -647,14 +675,33 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [],
       seatIndex,
       seatFacing: ROOMS[room].facings?.[seatIndex],
       seatType: ROOMS[room].subzones?.[seatIndex] || 'desk',
-      currentFloor: movementFloors[agent.id] || movementSample?.floor || pendingFloor,
+      currentFloor: movementFloors[agent.id] || movementSample?.floor || (arrivingTemp ? 'upper' : pendingFloor),
       currentPosition: movementSample?.position || currentPosition,
       destination: [left, top],
     };
   });
+  // Keep each live agent's latest physical sample. When a temp agent drops off
+  // the roster, the departure effect still needs its last desk/corridor point,
+  // not the position captured when it first arrived.
+  for (const agent of placedAgents) lastPlacedRef.current.set(agent.id, agent);
+  const liveIds = new Set(placedAgents.map((agent) => agent.id));
+  const stagedDepartures = departingAgents
+    .filter((agent) => !liveIds.has(agent.id))
+    .map((agent) => {
+      const movement = movementRef.current[agent.id];
+      const sample = movement ? interpolateRoute(movement.phases, movement.progress) : null;
+      return {
+        ...agent,
+        currentFloor: movementFloors[agent.id] || sample?.floor || agent.currentFloor,
+        currentPosition: agentPositions[agent.id] || sample?.position || agent.currentPosition,
+      };
+    });
+  const stageAgents = [...placedAgents, ...stagedDepartures];
   wanderStateRef.current = placedAgents;
 
-  const roomSignature = placedAgents.map((agent) => `${agent.id}:${agent.room}`).join('|');
+  const roomSignature = placedAgents
+    .map((agent) => `${agent.id}:${agent.room}:${agent.destination.join(',')}`)
+    .join('|');
 
   // Pause two agents mid-route for a comic dust-cloud brawl, then send them
   // back on their original way from wherever they were standing.
@@ -736,6 +783,7 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [],
       const positions = {};
       const floors = {};
       const finished = [];
+      const acceptedByFloor = { ground: [], upper: [] };
       for (const [id, entry] of entries) {
         if (entry.pausedMs == null) entry.pausedMs = 0;
         let progress = Math.min(1, (time - entry.start - entry.pausedMs) / entry.duration);
@@ -755,7 +803,13 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [],
         const atGate = approachRoom
           && isNearPoint(sample.position, ROOMS[approachRoom].entry.door, DOOR_GATE_RADIUS)
           && (time - doorOpenSinceRef.current[approachRoom]) < DOOR_OPEN_MS;
-        if (atGate && progress < 1) {
+        const blockedByAgent = (acceptedByFloor[sample.floor] || []).some((position) => (
+          Math.hypot(
+            (sample.position[0] - position[0]) * OFFICE_PATH.xScale,
+            sample.position[1] - position[1],
+          ) < AGENT_WALK_CLEARANCE
+        ));
+        if ((atGate || blockedByAgent) && progress < 1) {
           // Freeze progress this frame by absorbing the elapsed delta.
           entry.pausedMs += delta;
           progress = Math.min(1, (time - entry.start - entry.pausedMs) / entry.duration);
@@ -765,6 +819,7 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [],
         entry.progress = progress;
         positions[id] = sample.position;
         floors[id] = sample.floor;
+        (acceptedByFloor[sample.floor] ||= []).push(sample.position);
         if (progress >= 1) finished.push(id);
       }
 
@@ -781,7 +836,16 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [],
       setAgentPositions((current) => ({ ...current, ...positions }));
       setMovementFloors((current) => ({ ...current, ...floors }));
       if (finished.length) {
+        const completedDepartures = finished.filter((id) => movementRef.current[id]?.kind === 'departure');
         for (const id of finished) delete movementRef.current[id];
+        if (completedDepartures.length) {
+          for (const id of completedDepartures) {
+            departingRef.current.delete(id);
+            delete previousRooms.current[id];
+            delete previousPositions.current[id];
+          }
+          setDepartingAgents([...departingRef.current.values()]);
+        }
         setMovingAgents((current) => current.filter((id) => !finished.includes(id)));
         setAgentPositions((current) => {
           const next = { ...current };
@@ -797,7 +861,12 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [],
 
       // Two agents whose live positions cross paths closely enough bump into
       // each other and break into a brawl instead of walking through.
-      const activeIds = Object.keys(positions);
+      const tempIds = new Set((wanderStateRef.current || [])
+        .filter((agent) => agent.subagent === true)
+        .map((agent) => agent.id));
+      const activeIds = Object.keys(positions).filter((id) => (
+        !finished.includes(id) && !departingRef.current.has(id) && !tempIds.has(id)
+      ));
       const now = time;
       for (let i = 0; i < activeIds.length; i += 1) {
         const idA = activeIds[i];
@@ -829,6 +898,10 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [],
       if (movementFrameRef.current != null) cancelAnimationFrame(movementFrameRef.current);
       movementFrameRef.current = null;
       movementRef.current = {};
+      departingRef.current.clear();
+      previousRosterRef.current.clear();
+      lastPlacedRef.current.clear();
+      seatAssignmentsRef.current = {};
       for (const timeoutId of Object.values(fightTimeoutsRef.current)) window.clearTimeout(timeoutId);
       fightTimeoutsRef.current = {};
     };
@@ -858,6 +931,7 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [],
       movementRef.current[agent.id] = {
         fromRoom: 'breakroom',
         toRoom: 'breakroom',
+        kind: 'wander',
         phases,
         progress: 0,
         start: performance.now(),
@@ -872,25 +946,143 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [],
     return () => window.clearInterval(timer);
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const nextRooms = Object.fromEntries(placedAgents.map((agent) => [agent.id, agent.room]));
     const nextPositions = Object.fromEntries(placedAgents.map((agent) => [agent.id, agent.destination]));
     const prevRooms = previousRooms.current;
     const prevPositions = previousPositions.current;
-    const liveIds = new Set(Object.keys(nextRooms));
-    const moved = placedAgents
-      .filter((agent) => prevRooms[agent.id] && prevRooms[agent.id] !== agent.room)
-      .map((agent) => agent.id);
+    const liveIdSet = new Set(Object.keys(nextRooms));
+    const previousPlaced = [...previousRosterRef.current.values()];
+    const lifecycle = tempAgentLifecycleChanges(previousPlaced, placedAgents);
+    const returned = placedAgents.filter((agent) => (
+      agent.subagent === true && departingRef.current.has(agent.id)
+    ));
+    const returnedIds = new Set(returned.map((agent) => agent.id));
+    const arrivals = lifecycle.arrivals.filter((agent) => !returnedIds.has(agent.id));
+    const arrivalIds = new Set(arrivals.map((agent) => agent.id));
+    const moved = placedAgents.filter((agent) => (
+      !arrivalIds.has(agent.id)
+      && !returnedIds.has(agent.id)
+      && prevRooms[agent.id]
+      && movementRef.current[agent.id]?.kind !== 'wander'
+      && placementsDiffer(
+        prevRooms[agent.id],
+        prevPositions[agent.id],
+        agent.room,
+        agent.destination,
+      )
+    ));
+    const started = new Set();
+    const routeStarts = {};
+    const routeFloors = {};
+    const now = performance.now();
+    let departingChanged = false;
+
+    const startMovement = (agent, destination, toRoom, kind, options = {}) => {
+      const active = movementRef.current[agent.id];
+      const activeSample = active ? interpolateRoute(active.phases, active.progress) : null;
+      const fallbackRoom = options.previousRoom || prevRooms[agent.id] || agent.room;
+      const fallbackConfig = ROOMS[fallbackRoom] || TEMP_AGENT_PORTAL_ROOM;
+      const fromPosition = options.forceStart
+        ? options.position
+        : activeSample?.position
+          || agentPositions[agent.id]
+          || options.position
+          || prevPositions[agent.id]
+          || fallbackConfig.entry.inside;
+      const fromFloor = options.forceStart
+        ? options.floor
+        : movementFloors[agent.id]
+          || activeSample?.floor
+          || options.floor
+          || fallbackConfig.floor;
+      const origin = resolveRouteOrigin(active, fromFloor, fromPosition, fallbackRoom);
+      const destinationRoom = kind === 'departure' ? TEMP_AGENT_PORTAL_ROOM : ROOMS[toRoom];
+      const phases = buildRoutePhases(fromPosition, destination, origin.config, destinationRoom);
+      movementRef.current[agent.id] = {
+        fromRoom: origin.room || fallbackRoom,
+        toRoom,
+        kind,
+        phases,
+        progress: 0,
+        start: now,
+        duration: Math.min(14000, Math.max(1600, routeLength(phases) * 52)),
+      };
+      routeStarts[agent.id] = fromPosition;
+      routeFloors[agent.id] = fromFloor;
+      started.add(agent.id);
+      return { position: fromPosition, floor: fromFloor };
+    };
+
+    // New temp agents always begin at the Break Room portal, including those
+    // already present when this view first mounts.
+    for (const agent of arrivals) {
+      startMovement(agent, agent.destination, agent.room, 'arrival', {
+        forceStart: true,
+        position: TEMP_AGENT_SPAWN,
+        floor: 'upper',
+        previousRoom: 'breakroom',
+      });
+    }
+
+    // If a polling gap briefly removes a temp agent and it comes back before
+    // reaching the portal, turn it around from its exact live position.
+    for (const agent of returned) {
+      departingRef.current.delete(agent.id);
+      departingChanged = true;
+      startMovement(agent, agent.destination, agent.room, 'return', {
+        previousRoom: prevRooms[agent.id] || agent.room,
+      });
+    }
+
+    for (const agent of moved) {
+      startMovement(agent, agent.destination, agent.room, 'move', {
+        previousRoom: prevRooms[agent.id],
+      });
+    }
+
+    // Removed temp agents remain rendered as a snapshot and are destroyed only
+    // after their route has physically reached the Break Room spawn point.
+    for (const rosterAgent of lifecycle.departures) {
+      const agent = lastPlacedRef.current.get(rosterAgent.id) || rosterAgent;
+      if (departingRef.current.has(agent.id)) continue;
+      const start = startMovement(agent, TEMP_AGENT_SPAWN, 'breakroom', 'departure', {
+        position: agent.currentPosition || prevPositions[agent.id] || agent.destination,
+        floor: agent.currentFloor || ROOMS[agent.room]?.floor,
+        previousRoom: agent.room,
+      });
+      departingRef.current.set(agent.id, {
+        ...agent,
+        room: 'breakroom',
+        destination: TEMP_AGENT_SPAWN,
+        currentPosition: start.position,
+        currentFloor: start.floor,
+        seatType: 'art',
+        departing: true,
+      });
+      departingChanged = true;
+    }
 
     previousRooms.current = nextRooms;
     previousPositions.current = nextPositions;
+    previousRosterRef.current = new Map(placedAgents.map((agent) => [agent.id, agent]));
 
+    const stagedIds = new Set([...liveIdSet, ...departingRef.current.keys()]);
+    for (const id of lastPlacedRef.current.keys()) {
+      if (!stagedIds.has(id)) lastPlacedRef.current.delete(id);
+    }
     for (const id of Object.keys(movementRef.current)) {
-      if (!liveIds.has(id)) delete movementRef.current[id];
+      if (!stagedIds.has(id)) delete movementRef.current[id];
+    }
+    if (departingChanged) setDepartingAgents([...departingRef.current.values()]);
+    if (started.size) {
+      setAgentPositions((current) => ({ ...current, ...routeStarts }));
+      setMovementFloors((current) => ({ ...current, ...routeFloors }));
     }
     setAgentPositions((current) => {
       const stale = Object.keys(current).filter((id) => (
-        !liveIds.has(id) || (!movementRef.current[id] && !moved.includes(id) && !fightingIdsRef.current.has(id))
+        !stagedIds.has(id)
+        || (!movementRef.current[id] && !started.has(id) && !fightingIdsRef.current.has(id))
       ));
       if (!stale.length) return current;
       const next = { ...current };
@@ -899,76 +1091,27 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [],
     });
     setMovementFloors((current) => {
       const stale = Object.keys(current).filter((id) => (
-        !liveIds.has(id) || (!movementRef.current[id] && !moved.includes(id) && !fightingIdsRef.current.has(id))
+        !stagedIds.has(id)
+        || (!movementRef.current[id] && !started.has(id) && !fightingIdsRef.current.has(id))
       ));
       if (!stale.length) return current;
       const next = { ...current };
       for (const id of stale) delete next[id];
       return next;
     });
-    setMovingAgents((current) => current.filter((id) => (
-      liveIds.has(id) && (movementRef.current[id] || moved.includes(id))
-    )));
+    setMovingAgents((current) => [...new Set([
+      ...current.filter((id) => stagedIds.has(id) && movementRef.current[id]),
+      ...started,
+    ])]);
     setWanderSeats((current) => {
-      const stale = Object.keys(current).filter((id) => !liveIds.has(id) || nextRooms[id] !== 'breakroom');
+      const stale = Object.keys(current).filter((id) => !liveIdSet.has(id) || nextRooms[id] !== 'breakroom');
       if (!stale.length) return current;
       const next = { ...current };
       for (const id of stale) delete next[id];
       return next;
     });
 
-    if (!moved.length) return undefined;
-
-    const now = performance.now();
-    for (const agent of placedAgents) {
-      if (!moved.includes(agent.id)) continue;
-      const active = movementRef.current[agent.id];
-      const activeSample = active ? interpolateRoute(active.phases, active.progress) : null;
-      const fallbackRoom = activeSample?.floor === ROOMS[active?.toRoom]?.floor
-        ? active?.toRoom
-        : active?.fromRoom || prevRooms[agent.id];
-      const fallbackConfig = ROOMS[fallbackRoom] || ROOMS.meeting;
-      const fromSeat = activeSample?.position
-        || agentPositions[agent.id]
-        || (Array.isArray(prevPositions[agent.id]) ? prevPositions[agent.id] : fallbackConfig.entry.inside);
-
-      let fromRoomConfig = fallbackConfig;
-      if (activeSample?.floor === 'ground' && fromSeat[1] >= 42 && fromSeat[1] <= 59) {
-        fromRoomConfig = {
-          floor: 'ground',
-          entry: {
-            door: [fromSeat[0], OFFICE_PATH.corridorY],
-            inside: [fromSeat[0], OFFICE_PATH.corridorY],
-            axis: 'vertical',
-          },
-        };
-      } else if (
-        activeSample?.floor === 'upper'
-        && isNearPoint(fromSeat, OFFICE_PATH.stairPortal.upper, 8)
-      ) {
-        fromRoomConfig = {
-          floor: 'upper',
-          entry: {
-            door: OFFICE_PATH.stairPortal.upper,
-            inside: OFFICE_PATH.stairPortal.upper,
-            axis: 'horizontal',
-          },
-        };
-      }
-
-      const phases = buildRoutePhases(fromSeat, agent.destination, fromRoomConfig, ROOMS[agent.room]);
-      const duration = Math.min(12000, Math.max(1600, routeLength(phases) * 52));
-      movementRef.current[agent.id] = {
-        fromRoom: fallbackRoom,
-        toRoom: agent.room,
-        phases,
-        progress: 0,
-        start: now,
-        duration,
-      };
-    }
-    setMovingAgents((current) => [...new Set([...current, ...moved])]);
-    if (movementFrameRef.current == null && movementTickRef.current) {
+    if (started.size && movementFrameRef.current == null && movementTickRef.current) {
       movementFrameRef.current = requestAnimationFrame(movementTickRef.current);
     }
     return undefined;
@@ -992,7 +1135,7 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [],
     room,
     placedAgents.filter((agent) => agent.room === room).length,
   ]));
-  const visibleAgents = placedAgents.filter((agent) => {
+  const visibleAgents = stageAgents.filter((agent) => {
     const matchesStatus = statusFilter === 'all' || agent.status === statusFilter;
     const matchesRoom = roomFilter === 'all' || agent.room === roomFilter;
     return matchesStatus && matchesRoom;
@@ -1042,7 +1185,7 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [],
     return 'front';
   };
 
-  const movingSamples = placedAgents
+  const movingSamples = stageAgents
     .filter((agent) => movingAgents.includes(agent.id))
     .map((agent) => ({ floor: agent.currentFloor, position: livePosition(agent) }));
   const openDoors = new Set(roomOrder.filter((room) => (
@@ -1211,6 +1354,10 @@ function OfficeFloor({ agents = [], onSelectAgent, selectedAgent, timeline = [],
           return (
           <div
             className={`map-agent agent-${agent.name.toLowerCase().replace(/[^a-z0-9_-]+/g, '-')} ${agent.status} ${agent.room} facing-${facing} hair-${index % 4} ${agent.subagent ? 'subagent' : ''} ${moving ? 'moving' : ''} ${seated ? 'seated' : ''} ${atWorkstation ? 'at-workstation' : ''} ${atPcWorkstation ? 'pc-workstation' : ''} ${stairClass} ${selectedAgent?.id === agent.id ? 'selected' : ''} ${searchClass}`}
+            data-agent-id={agent.id}
+            data-floor={agent.currentFloor}
+            data-location={currentLocationFor(agent.currentFloor, position) || ''}
+            data-lifecycle={agent.departing ? 'departing' : moving && agent.subagent ? 'arriving' : 'settled'}
             style={{ '--left': `${position[0]}%`, '--top': `${position[1]}%`, '--depth': 20 + Math.round(position[1]), '--delay': `${index * -0.8}s`, '--agent-glow': art.accent }}
             key={agent.id}
             title={`${agent.name} · ${ROOMS[agent.room].label} · ${agent.current_task || agent.status}`}

@@ -49,6 +49,13 @@ const SIT_SHIFT = {
 // break-out space.
 const WANDER_ROOMS = new Set(['breakroom', 'groundLounge', 'sofaNook']);
 
+// Where an agent that was not here a moment ago walks in from, and where one
+// that has dropped off the roster walks out to, per floor. Temp agents come
+// and go mid-session, and popping in and out at a desk reads as a glitch
+// rather than as somebody arriving. The ground floor's stand-in is its lounge,
+// since the canonical break room lives upstairs.
+const ENTRY_ROOM_BY_FLOOR = { floor1: 'groundLounge', upper: 'breakroom' };
+
 // Where a sprite actually stands when seated, given the chair's facing.
 function seatPose(seat) {
   const shift = SIT_SHIFT[seat.direction] || SIT_SHIFT.down;
@@ -168,17 +175,35 @@ export default class PixelOfficeScene extends Phaser.Scene {
       this.tilemap.destroy();
       this.tilemap = null;
     }
-    for (const entry of this.agentSprites.values()) {
-      entry.pulseTween?.stop();
-      entry.sprite.destroy();
-      entry.label.destroy();
-      entry.dot.destroy();
-      entry.ring.destroy();
-    }
+    for (const entry of this.agentSprites.values()) this.destroyEntry(entry);
     this.agentSprites.clear();
     this.seats = [];
     this.walkGrid = null;
     this.roomRects = new Map();
+    // The first roster on a freshly built floor is the office as it already
+    // stands: those agents belong at their desks, not walking in from the
+    // lounge. Everyone after that is genuinely arriving.
+    this.rosterSeen = false;
+  }
+
+  destroyEntry(entry) {
+    entry.pulseTween?.stop();
+    entry.sprite.destroy();
+    entry.label.destroy();
+    entry.dot.destroy();
+    entry.ring.destroy();
+  }
+
+  // A spot inside this floor's arrivals/departures room, padded by a tile so
+  // walk-ins do not all start on the same seat.
+  entryPoint() {
+    if (!this.walkGrid) return null;
+    const rect = this.roomRects.get(ENTRY_ROOM_BY_FLOOR[this.currentFloorId]);
+    if (!rect) return null;
+    const padded = {
+      x1: rect.x1 - TILE, y1: rect.y1 - TILE, x2: rect.x2 + TILE, y2: rect.y2 + TILE,
+    };
+    return randomWalkableInRect(this.walkGrid, GRID_COLS, GRID_ROWS, padded);
   }
 
   // Switches the active floor: floor1 is the real Tiled map; the upper
@@ -398,6 +423,13 @@ export default class PixelOfficeScene extends Phaser.Scene {
       this.settleAtSeat(entry);
       return;
     }
+    // Reached the lounge on the way out: this is where the agent leaves from,
+    // so this is the moment its sprite goes.
+    if (entry.goal === 'exit') {
+      this.destroyEntry(entry);
+      this.agentSprites.delete(entry.id);
+      return;
+    }
     // Arrived at a wander stop: stand around a while before the next one.
     entry.mode = 'wander';
     entry.path = null;
@@ -504,7 +536,7 @@ export default class PixelOfficeScene extends Phaser.Scene {
         ring.setVisible(false);
 
         entry = {
-          sprite, label, dot, ring, texture: textureKey, agentRef, mode: 'settled', path: null, pathIndex: 0, wanderAt: 0,
+          sprite, label, dot, ring, texture: textureKey, agentRef, id: agent.id, mode: 'settled', path: null, pathIndex: 0, wanderAt: 0,
         };
         this.agentSprites.set(agent.id, entry);
       }
@@ -522,14 +554,21 @@ export default class PixelOfficeScene extends Phaser.Scene {
       entry.label.setText(displayName);
       entry.dot.setFillStyle(tint);
 
-      // An agent appearing for the first time is placed at its desk — only a
-      // *reassignment* is worth animating, otherwise every poll after a page
-      // load would start the whole roster marching in from wherever they
-      // happened to be.
+      // The floor's opening roster is placed straight at its desks — only a
+      // *reassignment*, or an agent that genuinely turned up afterwards, is
+      // worth animating, otherwise every poll after a page load would start
+      // the whole roster marching in from wherever they happened to be.
       const seatChanged = !entry.seat || entry.seat.x !== seat.x || entry.seat.y !== seat.y;
       entry.seat = seat;
-      if (isNew) {
+      const walkIn = isNew && this.rosterSeen ? this.entryPoint() : null;
+      if (walkIn) {
+        this.placeEntry(entry, walkIn.x, walkIn.y);
+        this.walkTo(entry, { x: seat.x, y: seat.y }, 'seat');
+      } else if (isNew) {
         this.settleAtSeat(entry);
+      } else if (entry.goal === 'exit') {
+        // Back on the roster before it finished leaving: turn it round.
+        this.walkTo(entry, { x: seat.x, y: seat.y }, 'seat');
       } else if (seatChanged) {
         this.walkTo(entry, { x: seat.x, y: seat.y }, 'seat');
       } else if (entry.mode === 'settled') {
@@ -560,15 +599,26 @@ export default class PixelOfficeScene extends Phaser.Scene {
       }
     });
 
+    // An agent that dropped off the roster keeps its sprite and walks out
+    // through the lounge instead of blinking off its chair. One already on its
+    // way out is left to finish the walk.
     for (const [id, entry] of this.agentSprites) {
       if (seen.has(id)) continue;
-      entry.pulseTween?.stop();
-      entry.sprite.destroy();
-      entry.label.destroy();
-      entry.dot.destroy();
-      entry.ring.destroy();
-      this.agentSprites.delete(id);
+      if (entry.goal === 'exit' && entry.mode === 'walking') continue;
+      const exitAt = this.entryPoint();
+      if (exitAt) {
+        entry.ring.setVisible(false);
+        this.walkTo(entry, exitAt, 'exit');
+      }
+      // No route out (already standing in the lounge, or mid-walk elsewhere
+      // with nowhere to route from): nothing to animate, so it just goes.
+      if (entry.goal !== 'exit' || entry.mode !== 'walking') {
+        this.destroyEntry(entry);
+        this.agentSprites.delete(id);
+      }
     }
+
+    if (agents.length) this.rosterSeen = true;
 
     return { offFloorCount };
   }

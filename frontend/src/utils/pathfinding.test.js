@@ -4,13 +4,16 @@ import {
   buildRoute,
   buildRoutePhases,
   buildWanderPhases,
+  distanceToSegment,
   interpolatePath,
   interpolateRoute,
   isNearPoint,
   isOnStairs,
   OFFICE_PATH,
   pathLength,
+  routeCrossesWall,
   routeLength,
+  segmentCrossesWall,
 } from './pathfinding.js';
 
 const groundNorth = {
@@ -27,7 +30,7 @@ const upper = {
 };
 
 test('same-floor route crosses both room doors and central corridor', () => {
-  const route = buildRoute([10, 50], [40, 82], groundNorth, groundSouth);
+  const route = buildRoute([10, 30], [40, 82], groundNorth, groundSouth);
   assert.deepEqual(route[route.length - 1], [40, 82]);
   assert.ok(route.some(([x, y]) => x === 17.5 && y === 42.5));
   assert.ok(route.some(([x, y]) => x === 42.5 && y === 58));
@@ -61,6 +64,20 @@ test('interpolation remains distance weighted and door proximity is bounded', ()
   assert.equal(isNearPoint([17.5, 47.5], [17.5, 42.5]), false);
 });
 
+test('wall collision geometry leaves doorways open and blocks solid partitions', () => {
+  assert.equal(segmentCrossesWall('ground', [20, 20], [40, 20]), true);
+  assert.equal(segmentCrossesWall('ground', [17.5, 39], [17.5, 50]), false);
+  assert.equal(segmentCrossesWall('ground', [29, 50], [29, 70]), true);
+  assert.equal(segmentCrossesWall('upper', [20, 30], [45, 30]), true);
+  assert.equal(segmentCrossesWall('upper', [20, 59], [70, 59]), false);
+});
+
+test('a frame step cannot leap over a closed-door proximity check', () => {
+  const door = [17.5, 42.5];
+  assert.equal(distanceToSegment(door, [17.5, 48], [17.5, 38]), 0);
+  assert.ok(distanceToSegment(door, [8, 50], [12, 50]) > 2);
+});
+
 test('route interpolation exposes the floor of the active phase', () => {
   const phases = [
     { floor: 'ground', path: [[0, 0], [10, 0]] },
@@ -82,10 +99,11 @@ const breakroom = {
   floor: 'upper',
   spots: [[13, 22], [25, 22], [67, 76]],
   egress: [
-    [[13, 33], [31, 33], [31, 52], [78, 52]],
-    [[25, 33], [31, 33], [31, 52], [78, 52]],
-    [[78, 76], [78, 52]],
+    [[13, 26], [29.5, 26], [29.5, 59], [78, 59], [78, 52]],
+    [[25, 26], [29.5, 26], [29.5, 59], [78, 59], [78, 52]],
+    [[67, 80], [61, 80], [61, 59], [78, 59], [78, 52]],
   ],
+  entry: { door: [84.5, 52], inside: [81, 52], axis: 'horizontal' },
 };
 
 test('wander between nearby seats trims the shared egress tail', () => {
@@ -101,12 +119,35 @@ test('wander between nearby seats trims the shared egress tail', () => {
 test('wander across the room keeps the shared junction exactly once', () => {
   const path = buildWanderPhases(breakroom, 0, 2)[0].path;
   assert.deepEqual(path.at(-1), [67, 76]);
-  assert.equal(path.filter(([x, y]) => x === 78 && y === 52).length, 1);
+  assert.equal(path.filter(([x, y]) => x === 78 && y === 59).length, 1);
 });
 
 test('wander to the same seat or an unknown seat stays put', () => {
   assert.deepEqual(buildWanderPhases(breakroom, 1, 1)[0].path, [[25, 22]]);
   assert.deepEqual(buildWanderPhases(breakroom, 0, 9), []);
+});
+
+test('generated routes stay inside rooms, corridors and mapped door openings', () => {
+  const sameFloor = buildRoutePhases([10, 30], [40, 82], groundNorth, {
+    floor: 'ground',
+    entry: { door: [42.5, 59], inside: [42.5, 62], axis: 'vertical' },
+  });
+  const crossFloor = buildRoutePhases([13, 22], [10, 30], breakroom, groundNorth);
+  assert.equal(routeCrossesWall(sameFloor), false);
+  assert.equal(routeCrossesWall(crossFloor), false);
+});
+
+test('mid-route Break Room reroutes rejoin egress lanes instead of crossing walls', () => {
+  const phases = buildRoutePhases([29.5, 40], [10, 30], breakroom, groundNorth);
+  assert.equal(routeCrossesWall(phases), false);
+  assert.ok(phases[0].path.some(([x, y]) => x === 29.5 && y === 59));
+  assert.ok(!phases[0].path.some(([x, y]) => x === 81 && y === 40));
+});
+
+test('ground-floor reroutes already in the corridor never cut back through a room wall', () => {
+  const phases = buildRoutePhases([40, 50], [40, 82], groundNorth, groundSouth);
+  assert.equal(routeCrossesWall(phases), false);
+  assert.ok(!phases[0].path.some(([x, y]) => x === 40 && y === 39));
 });
 
 test('isOnStairs matches the stair zone and rejects everything else', () => {
