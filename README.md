@@ -9,7 +9,7 @@
 
 | Photo office | Pixel office |
 |:--:|:--:|
-| ![Photo office view](docs/screenshots/office.png) | ![Pixel office view](docs/screenshots/pixel-office.png) |
+| ![Photo office view](docs/screenshots/office-photo-live.png) | ![Pixel office view](docs/screenshots/office-pixel-live.png) |
 | The detailed office I use day to day. | A lighter, game-like view with two floors, walking agents, pan and zoom. |
 
 ## What it is
