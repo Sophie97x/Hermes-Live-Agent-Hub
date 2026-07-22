@@ -129,6 +129,14 @@
 .stat-card small{font-size:12px}
 .office-page{padding:10px clamp(18px,2.4vw,34px) 34px}
 .office-page .office-frame{border-radius:18px!important}
+.office-style-switch{display:flex;gap:5px;margin:0 0 14px}
+.office-style-switch button{padding:7px 14px;border:1px solid #312c3e;border-radius:8px;background:#1a1723;color:#777184;font-size:11px;font-weight:600;cursor:pointer}
+.office-style-switch button:hover{color:#d1cadc}
+.office-style-switch button:focus-visible{outline:2px solid #8173ec;outline-offset:2px}
+.office-style-switch button.active{border-color:#6755c0;background:#2d2644;color:#eee9f8}
+:root[data-theme="light"] .office-style-switch button{border-color:#dcd8ea;background:#fff;color:#726d87}
+:root[data-theme="light"] .office-style-switch button.active{border-color:#7662d2;background:#eeeafb;color:#4633b0}
+.pixel-office-loading{display:grid;min-height:520px;place-items:center;border:1px solid #3a344e;border-radius:18px;background:#12101a;color:#aaa3b4;font-size:12px}
 .office-toolbar{height:50px}
 .content-panel{
   min-height:calc(100vh - 168px);

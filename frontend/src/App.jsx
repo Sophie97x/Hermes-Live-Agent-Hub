@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import KanbanBoard from './components/KanbanBoard';
 import CronJobs from './components/CronJobs';
@@ -9,6 +9,8 @@ import CommandPalette from './components/CommandPalette';
 import SettingsPage from './components/SettingsPage';
 import { agentArtFor } from './agentArt';
 import './App.css';
+
+const PixelOffice = lazy(() => import('./components/PixelOffice'));
 
 const API = import.meta.env.DEV ? 'http://localhost:3001' : '';
 
@@ -90,10 +92,20 @@ function App() {
   const [timeline, setTimeline] = useState([]);
   const [conversations, setConversations] = useState({});
   const [view, setView] = useState(viewFromLocation);
+  const [officeStyle, setOfficeStyle] = useState(() => {
+    const saved = window.localStorage.getItem('hermes.officeStyle');
+    return saved === 'pixel' ? 'pixel' : 'photo';
+  });
+  useEffect(() => {
+    window.localStorage.setItem('hermes.officeStyle', officeStyle);
+  }, [officeStyle]);
   const [connected, setConnected] = useState(false);
   const [lastUpdate, setLastUpdate] = useState(null);
   const [selectedAgent, setSelectedAgent] = useState(null);
   const [selectedProject, setSelectedProject] = useState(null);
+  // While an element is fullscreen the browser paints only that element's
+  // subtree, so app-level overlays must be portalled into it to stay visible.
+  const [fullscreenHost, setFullscreenHost] = useState(null);
   const [agentFilter, setAgentFilter] = useState('all');
   const [health, setHealth] = useState({ uptime_seconds: 0, alerts: [], stuck_jobs: [] });
   const [usage, setUsage] = useState(null);
@@ -105,6 +117,19 @@ function App() {
   const [savingSettings, setSavingSettings] = useState(false);
   const [desktopAlerts, setDesktopAlerts] = useState(() => window.localStorage.getItem('hermes-desktop-alerts') === 'on');
   const [uiTheme, setUiTheme] = useState(() => window.localStorage.getItem('hermes-ui-theme') === 'light' ? 'light' : 'dark');
+  useEffect(() => {
+    const syncFullscreenHost = () => setFullscreenHost(
+      document.fullscreenElement || document.webkitFullscreenElement || null,
+    );
+    syncFullscreenHost();
+    document.addEventListener('fullscreenchange', syncFullscreenHost);
+    document.addEventListener('webkitfullscreenchange', syncFullscreenHost);
+    return () => {
+      document.removeEventListener('fullscreenchange', syncFullscreenHost);
+      document.removeEventListener('webkitfullscreenchange', syncFullscreenHost);
+    };
+  }, []);
+
   const knownAlerts = useRef(new Set());
   const agentsRef = useRef([]);
   const alertsReady = useRef(false);
@@ -406,6 +431,10 @@ function App() {
     ]), 'text/csv');
   };
 
+  // Overlays render in place normally, but must be portalled into the
+  // fullscreen element while one is open or the browser will not paint them.
+  const inFullscreenHost = (node) => (fullscreenHost ? createPortal(node, fullscreenHost) : node);
+
   return (
     <div className="hub-shell">
       <aside className="sidebar">
@@ -477,7 +506,17 @@ function App() {
 
         {view === 'office' && (
           <div className="office-page">
-            <OfficeFloor agents={roster} onSelectAgent={setSelectedAgent} selectedAgent={selectedAgent} timeline={timeline} projectRooms={projectRooms} onSelectProject={setSelectedProject} kanban={kanban} />
+            <div className="office-style-switch" role="group" aria-label="Office view style">
+              <button type="button" className={officeStyle === 'photo' ? 'active' : ''} aria-pressed={officeStyle === 'photo'} onClick={() => setOfficeStyle('photo')}>Photo</button>
+              <button type="button" className={officeStyle === 'pixel' ? 'active' : ''} aria-pressed={officeStyle === 'pixel'} onClick={() => setOfficeStyle('pixel')}>Pixel</button>
+            </div>
+            {officeStyle === 'photo' ? (
+              <OfficeFloor agents={roster} onSelectAgent={setSelectedAgent} selectedAgent={selectedAgent} timeline={timeline} projectRooms={projectRooms} onSelectProject={setSelectedProject} kanban={kanban} />
+            ) : (
+              <Suspense fallback={<div className="pixel-office-loading" role="status">Loading pixel office…</div>}>
+                <PixelOffice agents={roster} selectedAgent={selectedAgent} onSelectAgent={setSelectedAgent} />
+              </Suspense>
+            )}
           </div>
         )}
 
@@ -508,7 +547,7 @@ function App() {
         {view === 'settings' && <Panel title="Settings" subtitle="Configure which local coding agents join the office"><SettingsPage data={settingsData} onSave={saveSettings} saving={savingSettings} /></Panel>}
       </main>
 
-      {selectedAgent && (
+      {selectedAgent && inFullscreenHost(
         <button className="agent-drawer-backdrop" aria-label="Close agent details" onClick={() => setSelectedAgent(null)}>
           <aside className="agent-drawer" onClick={(event) => event.stopPropagation()}>
             <button className="drawer-close" onClick={() => setSelectedAgent(null)}>×</button>
@@ -543,8 +582,8 @@ function App() {
           </aside>
         </button>
       )}
-      <ProjectRoomDrawer room={selectedProject} onClose={() => setSelectedProject(null)} />
-      <CommandPalette open={commandOpen} onClose={() => setCommandOpen(false)} agents={roster} rooms={projectRooms} tasks={allTasks} onCommand={runCommand} />
+      {inFullscreenHost(<ProjectRoomDrawer room={selectedProject} onClose={() => setSelectedProject(null)} />)}
+      {inFullscreenHost(<CommandPalette open={commandOpen} onClose={() => setCommandOpen(false)} agents={roster} rooms={projectRooms} tasks={allTasks} onCommand={runCommand} />)}
       {toast && <button className="failure-toast" onClick={() => { setToast(null); setShowHealth(true); }}><span>!</span><p><strong>{toast.title}</strong><small>{toast.detail}</small></p></button>}
     </div>
   );

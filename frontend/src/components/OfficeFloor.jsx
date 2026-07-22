@@ -13,6 +13,7 @@ import {
   OFFICE_PATH,
   routeLength,
 } from '../utils/pathfinding';
+import { destinationFor } from '../utils/agentRooms';
 
 // Fixed coordinate space matching the 3:2 floor photos. Every percent-positioned
 // overlay lives on this stage, which scales uniformly to fit the map container,
@@ -212,27 +213,6 @@ const THEMES = {
   daylight: { label: 'Daylight' },
   botanical: { label: 'Botanical' },
 };
-
-const HOME_ROOMS = {
-  Friday: 'operations', Atlas: 'meeting', Orion: 'research', Devin: 'coding',
-  Quinn: 'quality', Scribe: 'research', Maya: 'creative', Scout: 'research', Studio: 'creative',
-};
-
-function destinationFor(agent) {
-  const task = `${agent.current_task || ''} ${agent.name || ''}`.toLowerCase();
-  if (/taking a break|recharging|break time/.test(task)) return 'breakroom';
-  if (agent.status === 'idle') return 'breakroom';
-  if (agent.name === 'Friday') return 'operations';
-  if (['queued', 'waiting', 'error'].includes(agent.status)) return 'meeting';
-  if (agent.name === 'Atlas') return 'meeting';
-  if (agent.name === 'Quinn' || /quality|test|testing|qa|verify|validation/.test(task)) return 'quality';
-  if (['Maya', 'Studio'].includes(agent.name) || /design|creative|image|video|visual|ux|ui/.test(task)) return 'creative';
-  if (/waiting|blocked|approval|review|sync|meeting/.test(task)) return 'meeting';
-  if (/research|search|analyse|analyze|document|obsidian|read|investigate/.test(task)) return 'research';
-  if (/monitor|cron|deploy|backend|server|gateway|schedule|incident|system/.test(task)) return 'operations';
-  if (HOME_ROOMS[agent.name]) return HOME_ROOMS[agent.name];
-  return agent.home === 'meeting' ? 'meeting' : agent.home === 'quality' ? 'quality' : agent.home === 'creative' ? 'creative' : 'coding';
-}
 
 // Seat plan for the Break Room: wandering agents keep their chosen spot, the
 // rest fill the remaining seats in arrival order.
