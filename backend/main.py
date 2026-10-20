@@ -5,6 +5,7 @@ No demo data, no simulated agents.
 """
 import asyncio
 import json
+import ipaddress
 import math
 import os
 import sqlite3
@@ -17,6 +18,8 @@ from typing import AsyncGenerator, Optional
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from sse_starlette.sse import EventSourceResponse
 
 try:
@@ -27,12 +30,44 @@ except ImportError:  # started as `uvicorn main:app` from backend/
 app = FastAPI(title="Hermes Agent Hub")
 HUB_STARTED_AT = time.time()
 
+# This adapter can read private local transcripts; only trusted local pages
+# should be able to read its API or change its source directories.
+ALLOWED_ORIGINS = {
+    value.strip().rstrip("/") for value in os.environ.get(
+        "HUB_ALLOWED_ORIGINS", "http://localhost:5174,http://127.0.0.1:5174"
+    ).split(",") if value.strip()
+}
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=sorted(ALLOWED_ORIGINS),
+    allow_methods=["GET", "PUT", "POST", "OPTIONS"],
+    allow_headers=["Content-Type"],
 )
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=[value.strip() for value in os.environ.get(
+        "HUB_ALLOWED_HOSTS", "localhost,127.0.0.1"
+    ).split(",") if value.strip()],
+)
+
+
+@app.middleware("http")
+async def protect_local_data(request: Request, call_next):
+    try:
+        local_client = request.client is not None and ipaddress.ip_address(request.client.host).is_loopback
+    except ValueError:
+        local_client = False
+    if not local_client and os.environ.get("HUB_ALLOW_REMOTE") != "true":
+        return JSONResponse({"error": "Local access only"}, status_code=403)
+    origin = request.headers.get("origin")
+    own_origin = str(request.base_url).rstrip("/")
+    if ((origin and origin not in ALLOWED_ORIGINS and origin != own_origin)
+            or (not origin and request.headers.get("sec-fetch-site") == "cross-site")):
+        return JSONResponse({"error": "Untrusted browser origin"}, status_code=403)
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 HERMES_HOME = Path(os.environ.get("HERMES_HOME", "~/.hermes")).expanduser()
 STATE_DB = HERMES_HOME / "state.db"

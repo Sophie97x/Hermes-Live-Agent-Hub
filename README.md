@@ -66,7 +66,7 @@ The only Hub-owned configuration file on disk is `~/.config/hermes-agent-hub/set
 
 ## Run it locally
 
-You will need Python 3.11+ and Node.js 18+.
+You will need Python 3.11+ and Node.js 22.12+.
 
 ```bash
 git clone https://github.com/Sophie97x/Hermes-Live-Agent-Hub.git
@@ -119,3 +119,9 @@ This is a personal project built around my own Hermes setup. I have kept the pat
 ## Credits
 
 The Pixel office is adapted from [SkyOffice](https://github.com/kevinshen56714/SkyOffice) by Kuan-Hsuan Shen. SkyOffice is MIT licensed; its notice is included with the Pixel assets. Original pixel art is by LimeZu: [Modern Office](https://limezu.itch.io/modernoffice) and [Modern Interiors](https://limezu.itch.io/moderninteriors).
+
+## Private local access
+
+The backend is local-only by default. It rejects unexpected Host headers and foreign browser origins, and API responses are not cached. Keep the documented loopback bind. The Settings page still supports custom source directories for the trusted local user. The Vite development origins on port 5174 are allowed.
+
+If using a different trusted local development origin, set `HUB_ALLOWED_ORIGINS` to its exact comma-separated origins. Custom hostnames need `HUB_ALLOWED_HOSTS`. Do not use wildcards. For a remote deployment, place the service behind an authenticated reverse proxy and explicitly configure `HUB_ALLOW_REMOTE=true`, the proxy hostname and allowed origin. These settings do not provide remote authentication by themselves. Never expose the adapter directly to the public internet: it can read private agent transcripts and change Hub settings.
