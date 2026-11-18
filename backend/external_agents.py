@@ -47,6 +47,15 @@ _SOURCE_META = {
 }
 
 
+def _configured_home(value: str) -> Path:
+    """Resolve a configured state directory without leaving the user's home."""
+    home = Path.home().resolve()
+    candidate = Path(value).expanduser().resolve()
+    if not candidate.is_relative_to(home):
+        raise ValueError("State directories must be inside the current user's home directory.")
+    return candidate
+
+
 def load_settings() -> dict:
     settings = json.loads(json.dumps(DEFAULT_SETTINGS))
     try:
@@ -71,7 +80,7 @@ def _merge_settings(settings: dict, patch: dict) -> dict:
             if isinstance(update.get("enabled"), bool):
                 source["enabled"] = update["enabled"]
             if isinstance(update.get("home"), str) and update["home"].strip():
-                source["home"] = str(Path(update["home"].strip()).expanduser())
+                source["home"] = str(_configured_home(update["home"].strip()))
     return settings
 
 

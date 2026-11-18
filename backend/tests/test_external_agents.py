@@ -48,6 +48,13 @@ class ExternalAgentTests(unittest.TestCase):
         self.assertEqual(agent["status"], "working")
         self.assertEqual(agent["current_task"], "Fix the login bug")
 
+    def test_settings_reject_state_directory_outside_home(self):
+        settings = json.loads(json.dumps(external_agents.DEFAULT_SETTINGS))
+        with self.assertRaises(ValueError):
+            external_agents._merge_settings(settings, {
+                "sources": {"claude": {"home": str(self.root / "claude")}}
+            })
+
     def test_old_sessions_go_idle_then_disappear(self):
         session = _write_claude_session(self.root / "claude", "-Users-x-Demo", "/Users/x/Demo", "hello")
         hour_ago = time.time() - 3600
