@@ -26,14 +26,15 @@ SETTINGS_PATH = Path(
     )
 ).expanduser()
 
-_HERMES_HOME_DEFAULT = Path(os.environ.get("HERMES_HOME", "~/.hermes")).expanduser()
+_CONFIGURED_HERMES_HOME = Path(os.environ.get("HERMES_HOME", "~/.hermes")).expanduser()
+HERMES_HOME_DEFAULT = _CONFIGURED_HERMES_HOME.absolute()
 
 DEFAULT_SETTINGS: dict = {
     "external_activity_seconds": 120,
     "external_idle_hours": 6,
     "external_max_per_source": 3,
     "sources": {
-        "hermes": {"enabled": True, "home": str(_HERMES_HOME_DEFAULT), "label": "Hermes"},
+        "hermes": {"enabled": True, "home": str(HERMES_HOME_DEFAULT), "label": "Hermes"},
         "claude": {"enabled": True, "home": str(Path.home() / ".claude"), "label": "Claude Code"},
         "codex": {"enabled": True, "home": str(Path.home() / ".codex"), "label": "Codex"},
         "openclaw": {"enabled": True, "home": str(Path.home() / ".openclaw"), "label": "OpenClaw"},
@@ -83,8 +84,11 @@ def _merge_settings(settings: dict, patch: dict, *, from_disk: bool = False) -> 
             if isinstance(update.get("enabled"), bool):
                 source["enabled"] = update["enabled"]
             if "home" in update:
+                requested = update["home"]
+                if name == "hermes" and requested == str(_CONFIGURED_HERMES_HOME):
+                    requested = str(HERMES_HOME_DEFAULT)
                 for home in allowed_source_homes(name):
-                    if update["home"] == home:
+                    if requested == home:
                         source["home"] = home
                         break
                 else:
