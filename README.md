@@ -62,7 +62,7 @@ Claude Code / Codex / OpenClaw sessions
 
 The backend reads local SQLite, JSON and session files. It merges the legacy Hermes Kanban database with project boards under `~/.hermes/kanban/boards/`, scans agent profiles automatically and streams live updates to the browser.
 
-The only Hub-owned configuration file on disk is `~/.config/hermes-agent-hub/settings.json`. The browser also remembers small UI choices such as the theme and office view. From the Settings page I can disable a source, point it at a different state directory or adjust its activity window.
+The only Hub-owned configuration file on disk is `~/.config/hermes-agent-hub/settings.json`. The browser also remembers small UI choices such as the theme and office view. From the Settings page I can disable a source, select an approved state directory or adjust its activity window.
 
 ## Run it locally
 
@@ -122,6 +122,6 @@ The Pixel office is adapted from [SkyOffice](https://github.com/kevinshen56714/S
 
 ## Private local access
 
-The backend is local-only by default. It rejects unexpected Host headers and foreign browser origins, and API responses are not cached. Keep the documented loopback bind. The Settings page still supports custom source directories for the trusted local user. The Vite development origins on port 5174 are allowed.
+The backend is local-only by default. It rejects unexpected Host headers and foreign browser origins, and API responses are not cached. Keep the documented loopback bind. Settings offers each source’s standard state directory and any exact paths listed in its server environment variable. For example, set `HUB_CODEX_ALLOWED_HOMES=/srv/codex:/mnt/archive/codex` before starting the backend. Claude, Hermes and OpenClaw use the same naming pattern. Use absolute paths separated by the platform path separator. A previously saved custom directory must be allowlisted to keep using it. The Vite development origins on port 5174 are allowed.
 
 If using a different trusted local development origin, set `HUB_ALLOWED_ORIGINS` to its exact comma-separated origins. Custom hostnames need `HUB_ALLOWED_HOSTS`. Do not use wildcards. For a remote deployment, place the service behind an authenticated reverse proxy and explicitly configure `HUB_ALLOW_REMOTE=true`, the proxy hostname and allowed origin. These settings do not provide remote authentication by themselves. Never expose the adapter directly to the public internet: it can read private agent transcripts and change Hub settings.

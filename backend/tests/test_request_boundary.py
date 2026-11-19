@@ -45,8 +45,16 @@ class RequestBoundaryTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as folder, patch.object(external_agents, 'source_counts', return_value={}):
             settings_file = Path(folder) / 'settings.json'
             custom_home = str(Path(folder) / 'custom-codex')
-            with patch.object(external_agents, 'SETTINGS_PATH', settings_file):
+            with patch.object(external_agents, 'SETTINGS_PATH', settings_file), patch.dict(os.environ, {'HUB_CODEX_ALLOWED_HOMES': custom_home}):
                 response = await self.request('PUT', '/api/settings', headers={'Origin': 'http://localhost:3001'}, json={'sources': {'codex': {'home': custom_home}}})
+                denied = await self.request('PUT', '/api/settings', json={'sources': {'codex': {'home': folder}}})
+                self.assertEqual(denied.status_code, 422)
+                admitted = external_agents.load_settings()
+                self.assertEqual(admitted['sources']['codex']['home'], custom_home)
+            with patch.object(external_agents, 'SETTINGS_PATH', settings_file):
+                revoked = external_agents.load_settings()['sources']['codex']
+                self.assertFalse(revoked['enabled'])
+                self.assertEqual(revoked['home'], external_agents.DEFAULT_SETTINGS['sources']['codex']['home'])
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json()['settings']['sources']['codex']['home'], custom_home)
             self.assertEqual(json.loads(settings_file.read_text())['sources']['codex']['home'], custom_home)

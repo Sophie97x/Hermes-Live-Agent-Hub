@@ -69,7 +69,7 @@ async def protect_local_data(request: Request, call_next):
         response.headers["Cache-Control"] = "no-store"
     return response
 
-HERMES_HOME = Path(os.environ.get("HERMES_HOME", "~/.hermes")).expanduser()
+HERMES_HOME = external_agents.HERMES_HOME_DEFAULT
 STATE_DB = HERMES_HOME / "state.db"
 KANBAN_DB = HERMES_HOME / "kanban.db"
 CRON_JOBS = HERMES_HOME / "cron" / "jobs.json"
@@ -1022,7 +1022,8 @@ async def get_usage():
 @app.get("/api/settings")
 async def get_settings():
     settings = external_agents.load_settings()
-    return {"settings": settings, "detected": external_agents.source_counts(settings)}
+    return {"settings": settings, "detected": external_agents.source_counts(settings),
+            "allowedHomes": {name: external_agents.allowed_source_homes(name) for name in settings["sources"]}}
 
 
 @app.put("/api/settings")
@@ -1031,8 +1032,12 @@ async def put_settings(request: Request):
         patch = await request.json()
     except Exception:
         patch = {}
-    settings = external_agents.save_settings(patch if isinstance(patch, dict) else {})
-    return {"settings": settings, "detected": external_agents.source_counts(settings)}
+    try:
+        settings = external_agents.save_settings(patch if isinstance(patch, dict) else {})
+    except external_agents.UnapprovedSourceHome:
+        return JSONResponse({"error": "Select a state directory approved on the server."}, status_code=422)
+    return {"settings": settings, "detected": external_agents.source_counts(settings),
+            "allowedHomes": {name: external_agents.allowed_source_homes(name) for name in settings["sources"]}}
 
 
 async def _restart_hub() -> None:

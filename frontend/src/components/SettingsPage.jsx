@@ -62,13 +62,13 @@ function SettingsPage({ data, onSave, saving = false }) {
               </div>
               <label>
                 <span>State directory</span>
-                <input
-                  type="text"
+                <select
                   value={source.home}
                   onChange={(event) => setSource(name, { home: event.target.value })}
-                  spellCheck="false"
                   aria-label={`${source.label || name} state directory`}
-                />
+                >
+                  {(data.allowedHomes?.[name] || [source.home]).map(home => <option key={home} value={home}>{home}</option>)}
+                </select>
               </label>
             </article>
           );

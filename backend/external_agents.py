@@ -26,14 +26,15 @@ SETTINGS_PATH = Path(
     )
 ).expanduser()
 
-_HERMES_HOME_DEFAULT = Path(os.environ.get("HERMES_HOME", "~/.hermes")).expanduser()
+_CONFIGURED_HERMES_HOME = Path(os.environ.get("HERMES_HOME", "~/.hermes")).expanduser()
+HERMES_HOME_DEFAULT = _CONFIGURED_HERMES_HOME.absolute()
 
 DEFAULT_SETTINGS: dict = {
     "external_activity_seconds": 120,
     "external_idle_hours": 6,
     "external_max_per_source": 3,
     "sources": {
-        "hermes": {"enabled": True, "home": str(_HERMES_HOME_DEFAULT), "label": "Hermes"},
+        "hermes": {"enabled": True, "home": str(HERMES_HOME_DEFAULT), "label": "Hermes"},
         "claude": {"enabled": True, "home": str(Path.home() / ".claude"), "label": "Claude Code"},
         "codex": {"enabled": True, "home": str(Path.home() / ".codex"), "label": "Codex"},
         "openclaw": {"enabled": True, "home": str(Path.home() / ".openclaw"), "label": "OpenClaw"},
@@ -47,16 +48,28 @@ _SOURCE_META = {
 }
 
 
+def allowed_source_homes(name: str) -> list[str]:
+    default = DEFAULT_SETTINGS["sources"][name]["home"]
+    extra = os.environ.get(f"HUB_{name.upper()}_ALLOWED_HOMES", "")
+    paths = [default, *(item.strip() for item in extra.split(os.pathsep) if item.strip())]
+    return list(dict.fromkeys(str(Path(item).expanduser()) for item in paths
+                              if Path(item).expanduser().is_absolute()))
+
+
+class UnapprovedSourceHome(ValueError):
+    pass
+
+
 def load_settings() -> dict:
     settings = json.loads(json.dumps(DEFAULT_SETTINGS))
     try:
         saved = json.loads(SETTINGS_PATH.read_text())
     except (OSError, json.JSONDecodeError):
         return settings
-    return _merge_settings(settings, saved)
+    return _merge_settings(settings, saved if isinstance(saved, dict) else {}, from_disk=True)
 
 
-def _merge_settings(settings: dict, patch: dict) -> dict:
+def _merge_settings(settings: dict, patch: dict, *, from_disk: bool = False) -> dict:
     """Fold a saved/submitted patch into settings, keeping only known keys."""
     for key in ("external_activity_seconds", "external_idle_hours", "external_max_per_source"):
         value = patch.get(key)
@@ -70,8 +83,18 @@ def _merge_settings(settings: dict, patch: dict) -> dict:
                 continue
             if isinstance(update.get("enabled"), bool):
                 source["enabled"] = update["enabled"]
-            if isinstance(update.get("home"), str) and update["home"].strip():
-                source["home"] = str(Path(update["home"].strip()).expanduser())
+            if "home" in update:
+                requested = update["home"]
+                if name == "hermes" and requested == str(_CONFIGURED_HERMES_HOME):
+                    requested = str(HERMES_HOME_DEFAULT)
+                for home in allowed_source_homes(name):
+                    if requested == home:
+                        source["home"] = home
+                        break
+                else:
+                    if not from_disk:
+                        raise UnapprovedSourceHome(f"Unapproved {name} state directory")
+                    source["enabled"] = False
     return settings
 
 
