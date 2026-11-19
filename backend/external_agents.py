@@ -47,16 +47,28 @@ _SOURCE_META = {
 }
 
 
+def allowed_source_homes(name: str) -> list[str]:
+    default = DEFAULT_SETTINGS["sources"][name]["home"]
+    extra = os.environ.get(f"HUB_{name.upper()}_ALLOWED_HOMES", "")
+    paths = [default, *(item.strip() for item in extra.split(os.pathsep) if item.strip())]
+    return list(dict.fromkeys(str(Path(item).expanduser()) for item in paths
+                              if Path(item).expanduser().is_absolute()))
+
+
+class UnapprovedSourceHome(ValueError):
+    pass
+
+
 def load_settings() -> dict:
     settings = json.loads(json.dumps(DEFAULT_SETTINGS))
     try:
         saved = json.loads(SETTINGS_PATH.read_text())
     except (OSError, json.JSONDecodeError):
         return settings
-    return _merge_settings(settings, saved)
+    return _merge_settings(settings, saved if isinstance(saved, dict) else {}, from_disk=True)
 
 
-def _merge_settings(settings: dict, patch: dict) -> dict:
+def _merge_settings(settings: dict, patch: dict, *, from_disk: bool = False) -> dict:
     """Fold a saved/submitted patch into settings, keeping only known keys."""
     for key in ("external_activity_seconds", "external_idle_hours", "external_max_per_source"):
         value = patch.get(key)
@@ -70,8 +82,15 @@ def _merge_settings(settings: dict, patch: dict) -> dict:
                 continue
             if isinstance(update.get("enabled"), bool):
                 source["enabled"] = update["enabled"]
-            if isinstance(update.get("home"), str) and update["home"].strip():
-                source["home"] = str(Path(update["home"].strip()).expanduser())
+            if "home" in update:
+                for home in allowed_source_homes(name):
+                    if update["home"] == home:
+                        source["home"] = home
+                        break
+                else:
+                    if not from_disk:
+                        raise UnapprovedSourceHome(f"Unapproved {name} state directory")
+                    source["enabled"] = False
     return settings
 
 

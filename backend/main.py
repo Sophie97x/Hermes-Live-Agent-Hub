@@ -1022,7 +1022,8 @@ async def get_usage():
 @app.get("/api/settings")
 async def get_settings():
     settings = external_agents.load_settings()
-    return {"settings": settings, "detected": external_agents.source_counts(settings)}
+    return {"settings": settings, "detected": external_agents.source_counts(settings),
+            "allowedHomes": {name: external_agents.allowed_source_homes(name) for name in settings["sources"]}}
 
 
 @app.put("/api/settings")
@@ -1031,8 +1032,12 @@ async def put_settings(request: Request):
         patch = await request.json()
     except Exception:
         patch = {}
-    settings = external_agents.save_settings(patch if isinstance(patch, dict) else {})
-    return {"settings": settings, "detected": external_agents.source_counts(settings)}
+    try:
+        settings = external_agents.save_settings(patch if isinstance(patch, dict) else {})
+    except external_agents.UnapprovedSourceHome as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    return {"settings": settings, "detected": external_agents.source_counts(settings),
+            "allowedHomes": {name: external_agents.allowed_source_homes(name) for name in settings["sources"]}}
 
 
 async def _restart_hub() -> None:

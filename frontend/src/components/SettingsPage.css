@@ -14,8 +14,8 @@
 .settings-source-head em.found { color: #62d39e; }
 .settings-source label { display: grid; gap: 5px; }
 .settings-source label span, .settings-numbers label span { color: #989eab; font-size: 11px; }
-.settings-source input, .settings-numbers input { padding: 9px 11px; border: 1px solid #303544; border-radius: 9px; background: #0f1219; color: #e8e6f0; font: 500 12.5px ui-monospace, monospace; }
-.settings-source input:focus, .settings-numbers input:focus { outline: none; border-color: #7662d2; }
+.settings-source select, .settings-numbers input { padding: 9px 11px; border: 1px solid #303544; border-radius: 9px; background: #0f1219; color: #e8e6f0; font: 500 12.5px ui-monospace, monospace; }
+.settings-source select:focus, .settings-numbers input:focus { outline: none; border-color: #7662d2; }
 .settings-numbers { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
 .settings-numbers label { display: grid; gap: 5px; }
 .settings-numbers label em { color: #6d7382; font-style: normal; }
@@ -34,6 +34,6 @@
 :root[data-theme="light"] .settings-source { border-color: #e2dfec; background: #fbfaff; }
 :root[data-theme="light"] .settings-source.enabled { border-color: #cfc8e8; }
 :root[data-theme="light"] .settings-source-icon { background: #eeeafb; color: #4633b0; }
-:root[data-theme="light"] .settings-source input, :root[data-theme="light"] .settings-numbers input { border-color: #dcd8ea; background: #fff; color: #2c2840; }
+:root[data-theme="light"] .settings-source select, :root[data-theme="light"] .settings-numbers input { border-color: #dcd8ea; background: #fff; color: #2c2840; }
 :root[data-theme="light"] .settings-page .toggle { border-color: #dcd8ea; background: #eceaf4; }
 :root[data-theme="light"] .settings-footer small { color: #8c87a0; }
