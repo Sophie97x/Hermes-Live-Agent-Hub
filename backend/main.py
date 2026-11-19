@@ -1034,8 +1034,8 @@ async def put_settings(request: Request):
         patch = {}
     try:
         settings = external_agents.save_settings(patch if isinstance(patch, dict) else {})
-    except external_agents.UnapprovedSourceHome as exc:
-        return JSONResponse({"error": str(exc)}, status_code=422)
+    except external_agents.UnapprovedSourceHome:
+        return JSONResponse({"error": "Select a state directory approved on the server."}, status_code=422)
     return {"settings": settings, "detected": external_agents.source_counts(settings),
             "allowedHomes": {name: external_agents.allowed_source_homes(name) for name in settings["sources"]}}
 
